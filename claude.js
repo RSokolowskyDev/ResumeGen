@@ -38,6 +38,7 @@ const dom = {
 };
 
 let isGenerating = false;
+let session = null; // { keywords, jobDescText, atsResult, count }
 
 // ── TRANSFORMATION PROMPT + MODAL ─────────────────────────────────────────────
 
@@ -149,7 +150,7 @@ function updateApiKeyStatus() {
 
 // ── CLAUDE API CALL ───────────────────────────────────────────────────────────
 
-async function tailorWithClaude(resumeData, keywords, jobDescText) {
+async function tailorWithClaude(resumeData, keywords, jobDescText, atsResult = null) {
     const apiKey = getApiKey();
     if (!apiKey) throw new Error('No API key set');
 
@@ -179,8 +180,9 @@ RULES:
 - SUMMARY: Exactly 2 sentences. Open with the candidate's most relevant strength for THIS role. Mirror the job posting's vocabulary and priorities. No generic phrases like "results-driven" or "passionate about".
 - BULLETS: Start with an action verb. ≤22 words. Preserve all numbers/metrics exactly. Reframe each bullet to emphasize what THIS employer cares about. Do NOT invent facts or add new metrics.
 - BULLET COUNT: For each job, decide how relevant it is to this role. Write 3-5 bullets for highly relevant jobs, exactly 2 bullets for less relevant jobs. Never write more than 5 or fewer than 2 for any job.
-- Only rewrite bullets that are relevant — keep the rest as close to the original as possible.
 - Output ONLY the structured result below, nothing else.
+${atsResult && atsResult.missingRequired.length ? `
+IMPORTANT — KEYWORD GAP: The previous version scored ${atsResult.overall}%. These required keywords are MISSING — naturally weave as many as possible into the summary and bullets without forcing or inventing facts: ${atsResult.missingRequired.join(', ')}${atsResult.missingPreferred.length ? `\nAlso try to include these preferred keywords: ${atsResult.missingPreferred.slice(0, 8).join(', ')}` : ''}` : ''}
 
 JOBS IN THIS RESUME:
 ${jobList}
@@ -431,11 +433,41 @@ const STOP_WORDS = new Set([
     'strong','excellent','good','required','preferred','plus','bonus','nice','able','team',
     'teams','role','position','candidate','company','business','looking','seeking','join',
     'help','build','make','use','used','using','new','within','per','etc','job','tasks',
+    'including','related','relevant','across','multiple','various','ensure','support',
+    'responsible','responsibilities','duties','qualifications','skills','knowledge',
+    'demonstrated','proven','hands','day','basis','part','least','three','five','two',
 ]);
 
-const REQUIRED_SIGNALS = /\b(required|must have|mandatory|minimum|essential|necessary)\b/i;
-const PREFERRED_SIGNALS = /\b(preferred|nice to have|bonus|plus|ideally|desirable|optional)\b/i;
-const TECH_PHRASES = ['machine learning','deep learning','natural language processing','computer vision','data pipeline','data analysis','data science','data engineering','ci/cd','rest api','restful api','graphql','microservices','agile scrum','agile methodology','project management','cross-functional','version control','cloud computing','software development','full stack','full-stack'];
+const REQUIRED_SIGNALS = /\b(required|must have|must-have|mandatory|minimum|essential|necessary|require|requires)\b/i;
+const PREFERRED_SIGNALS = /\b(preferred|nice to have|bonus|plus|ideally|desirable|optional|advantage|advantageous|beneficial)\b/i;
+
+const TECH_PHRASES = [
+    'machine learning','deep learning','natural language processing','computer vision',
+    'large language model','large language models','generative ai','artificial intelligence',
+    'data pipeline','data analysis','data science','data engineering','data visualization',
+    'business intelligence','business analysis','product management','product development',
+    'software development','software engineering','full stack','full-stack','front end','back end',
+    'frontend','backend','mobile development','web development','api development',
+    'ci/cd','continuous integration','continuous deployment','continuous delivery',
+    'rest api','restful api','graphql','microservices','event driven','message queue',
+    'test driven development','unit testing','integration testing','end to end testing',
+    'agile','scrum','kanban','sprint','version control','code review',
+    'object oriented','functional programming','system design','distributed systems',
+    'cloud computing','cloud infrastructure','aws','google cloud','azure',
+    'kubernetes','docker','containerization','infrastructure as code','terraform',
+    'serverless','lambda','ec2','s3','rds','devops','site reliability','sre',
+    'sql','nosql','postgresql','mysql','mongodb','redis','elasticsearch',
+    'data warehouse','data lake','etl','spark','hadoop','airflow','dbt',
+    'tableau','power bi','looker','google analytics','a/b testing',
+    'project management','program management','cross-functional','stakeholder management',
+    'customer success','customer experience','account management','relationship management',
+    'digital marketing','social media','content marketing','seo','sem','paid media',
+    'salesforce','crm','erp','jira','confluence','slack',
+    'financial analysis','financial modeling','budget management','p&l',
+    'risk management','compliance','regulatory','audit','kyc','aml','cip',
+    'team leadership','people management','performance management','talent acquisition',
+    'change management','strategic planning','executive communication',
+];
 
 function extractKeywords(jobDesc) {
     const lc = jobDesc.toLowerCase();
@@ -443,15 +475,27 @@ function extractKeywords(jobDesc) {
     for (const w of lc.replace(/[^a-z0-9+#.\-\s]/g, ' ').split(/\s+/)) {
         if (w.length > 2 && !STOP_WORDS.has(w)) freq[w] = (freq[w] || 0) + 1;
     }
-    const detected = TECH_PHRASES.filter(p => lc.includes(p));
-    const topWords = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([w]) => w);
-    const all = [...new Set([...topWords, ...detected])];
+    const detectedPhrases = TECH_PHRASES.filter(p => lc.includes(p));
+    const phraseWords = new Set(detectedPhrases.flatMap(p => p.split(' ')));
+    const topWords = Object.entries(freq)
+        .filter(([w]) => !phraseWords.has(w))
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 40)
+        .map(([w]) => w);
+    const all = [...new Set([...detectedPhrases, ...topWords])];
     const required = [], preferred = [];
     for (const kw of all) {
-        const i = lc.indexOf(kw); if (i === -1) continue;
-        const win = lc.slice(Math.max(0, i - 200), Math.min(lc.length, i + 200));
-        if (PREFERRED_SIGNALS.test(win)) preferred.push(kw);
-        else if (REQUIRED_SIGNALS.test(win) || (freq[kw] || 0) >= 3) required.push(kw);
+        let idx = lc.indexOf(kw);
+        if (idx === -1) continue;
+        let isRequired = false, isPreferred = false;
+        while (idx !== -1) {
+            const win = lc.slice(Math.max(0, idx - 400), Math.min(lc.length, idx + 400));
+            if (REQUIRED_SIGNALS.test(win)) { isRequired = true; break; }
+            if (PREFERRED_SIGNALS.test(win)) isPreferred = true;
+            idx = lc.indexOf(kw, idx + 1);
+        }
+        if (isRequired || (freq[kw] || 0) >= 3) required.push(kw);
+        else if (isPreferred) preferred.push(kw);
         else ((freq[kw] || 0) >= 2 ? required : preferred).push(kw);
     }
     return { required, preferred, all: [...new Set([...required, ...preferred])] };
@@ -544,19 +588,28 @@ function buildEduItem(edu) {
 
 // ── ATS SCORER ────────────────────────────────────────────────────────────────
 
+function kwMatch(kw, text) {
+    const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${esc}\\b`, 'i').test(text)) return true;
+    const stem = kw.replace(/(?:ing|ed|er|es|s)$/i, '');
+    if (stem.length > 3 && stem !== kw) {
+        return new RegExp(`\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(text);
+    }
+    return false;
+}
+
 function scoreATS(resumeData, keywords) {
     const sections = {
-        summary:    resumeData.summary,
+        summary:    resumeData.summary || '',
         experience: resumeData.experience.map(j => [j.role, j.company, ...j.bullets].join(' ')).join(' '),
         skills:     resumeData.skills.join(' '),
     };
     const allText = Object.values(sections).join(' ').toLowerCase();
-    const has = (kw, t) => new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(t);
 
-    const reqHit  = keywords.required.filter(kw => has(kw, allText));
-    const reqMiss = keywords.required.filter(kw => !has(kw, allText));
-    const prefHit = keywords.preferred.filter(kw => has(kw, allText));
-    const prefMiss= keywords.preferred.filter(kw => !has(kw, allText));
+    const reqHit  = keywords.required.filter(kw => kwMatch(kw, allText));
+    const reqMiss = keywords.required.filter(kw => !kwMatch(kw, allText));
+    const prefHit = keywords.preferred.filter(kw => kwMatch(kw, allText));
+    const prefMiss = keywords.preferred.filter(kw => !kwMatch(kw, allText));
 
     const tw = keywords.required.length * 2 + keywords.preferred.length;
     const mw = reqHit.length * 2 + prefHit.length;
@@ -565,11 +618,17 @@ function scoreATS(resumeData, keywords) {
     const sectionScores = {};
     const all = [...keywords.required, ...keywords.preferred];
     for (const [n, t] of Object.entries(sections)) {
-        const hit = all.filter(kw => has(kw, t.toLowerCase()));
+        const hit = all.filter(kw => kwMatch(kw, t.toLowerCase()));
         sectionScores[n] = all.length > 0 ? Math.round((hit.length / all.length) * 100) : 0;
     }
 
-    return { overall, sectionScores, requiredMatched: reqHit.length, requiredTotal: keywords.required.length, preferredMatched: prefHit.length, preferredTotal: keywords.preferred.length, missingRequired: reqMiss.slice(0, 8), missingPreferred: prefMiss.slice(0, 8) };
+    return {
+        overall, sectionScores,
+        requiredMatched: reqHit.length, requiredTotal: keywords.required.length,
+        preferredMatched: prefHit.length, preferredTotal: keywords.preferred.length,
+        missingRequired: reqMiss,
+        missingPreferred: prefMiss,
+    };
 }
 
 function renderATS(r) {
@@ -584,9 +643,9 @@ function renderATS(r) {
         <div class="ats-count-row preferred"><span class="icon">◆</span> Preferred: ${r.preferredMatched}/${r.preferredTotal} matched</div>`;
 
     dom.atsMissingRequired.style.display = r.missingRequired.length ? 'flex' : 'none';
-    dom.atsMissingRequiredList.innerHTML = r.missingRequired.map(kw => `<span class="kw-tag required">${kw}</span>`).join('');
+    dom.atsMissingRequiredList.innerHTML = r.missingRequired.slice(0, 12).map(kw => `<span class="kw-tag required">${kw}</span>`).join('');
     dom.atsMissingPreferred.style.display = r.missingPreferred.length ? 'flex' : 'none';
-    dom.atsMissingPreferredList.innerHTML = r.missingPreferred.map(kw => `<span class="kw-tag preferred">${kw}</span>`).join('');
+    dom.atsMissingPreferredList.innerHTML = r.missingPreferred.slice(0, 12).map(kw => `<span class="kw-tag preferred">${kw}</span>`).join('');
 
     dom.atsSections.innerHTML = Object.entries(r.sectionScores).map(([n, p]) => `
         <div class="ats-section-row">
@@ -645,17 +704,36 @@ async function handleGenerate() {
     dom.pdfBtn.disabled = true;
     dom.atsPanel.classList.remove('visible');
 
-    initProgress(6);
+    if (!session || session.jobDescText !== jobDescText) {
+        session = { keywords: null, jobDescText, atsResult: null, count: 0 };
+    }
+    const isRefinement = session.count > 0 && session.atsResult;
+    initProgress(isRefinement ? 5 : 8);
 
     try {
         log('Parsing master resume…');
         const resumeData = parseResume(masterText);
 
-        log('Analyzing job description…');
-        const keywords = extractKeywords(jobDescText);
+        if (!session.keywords) {
+            log('Analyzing job description…');
+            session.keywords = extractKeywords(jobDescText);
+        }
+        const { keywords } = session;
 
-        log('Calling Claude API…');
-        await tailorWithClaude(resumeData, keywords, jobDescText);
+        if (isRefinement) {
+            log(`Refining (score was ${session.atsResult.overall}%) — targeting gaps…`);
+            await tailorWithClaude(resumeData, keywords, jobDescText, session.atsResult);
+        } else {
+            log('Pass 1 · Initial tailoring…');
+            await tailorWithClaude(resumeData, keywords, jobDescText, null);
+
+            log('Pass 1 · Scoring…');
+            const pass1 = scoreATS(resumeData, keywords);
+            log(`Pass 1 score: ${pass1.overall}% — running pass 2…`);
+
+            log('Pass 2 · Targeting keyword gaps…');
+            await tailorWithClaude(resumeData, keywords, jobDescText, pass1);
+        }
 
         log('Reordering skills by relevance…');
         resumeData.skills = reorderSkills(resumeData.skills, keywords.all);
@@ -664,10 +742,13 @@ async function handleGenerate() {
         renderResume(resumeData);
 
         log('Scoring ATS match…');
-        renderATS(scoreATS(resumeData, keywords));
+        const atsResult = scoreATS(resumeData, keywords);
+        renderATS(atsResult);
+        session.atsResult = atsResult;
+        session.count++;
 
         finishProgress();
-        log('Done — your tailored resume is ready!', 'done');
+        log(`Done — ${atsResult.overall}% ATS match${session.count > 1 ? ` (iteration ${session.count})` : ''}`, 'done');
         dom.pdfBtn.disabled = false;
 
     } catch (err) {
@@ -678,7 +759,7 @@ async function handleGenerate() {
         isGenerating = false;
         dom.generateBtn.disabled = false;
         dom.generateBtn.classList.remove('generating');
-        dom.generateBtn.textContent = 'Generate with Claude';
+        dom.generateBtn.textContent = session?.count > 0 ? 'Refine Resume' : 'Generate with Claude';
     }
 }
 
@@ -693,6 +774,8 @@ function printResume() {
 }
 
 function handleReset() {
+    session = null;
+    dom.generateBtn.textContent = 'Generate with Claude';
     dom.masterInput.value = '';
     dom.jobDescInput.value = '';
     dom.statusMessages.innerHTML = '';
