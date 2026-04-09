@@ -65,43 +65,51 @@ function updateApiKeyStatus() {
 // ── GROQ API CALL ─────────────────────────────────────────────────────────────
 
 async function tailorWithGroq(resumeData, keywords, jobDescText, atsResult = null) {
-    const bulletRefs = [];
-    resumeData.experience.forEach((job, ji) =>
-        job.bullets.forEach((b, bi) =>
-            bulletRefs.push({ ji, bi, text: b, ctx: `${job.role}${job.company ? ' at ' + job.company : ''}` })
-        )
-    );
+    const kwStr  = keywords.all.slice(0, 15).join(', ');
+    const jobCtx = jobDescText.slice(0, 2000);
+    const jobList = resumeData.experience.map((j, i) => `${i + 1}. ${j.role}${j.company ? ' at ' + j.company : ''}`).join('\n');
 
-    const kwStr   = keywords.all.slice(0, 15).join(', ');
-    const bullStr = bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n');
-    const jobList = resumeData.experience.map((j, i) => `${i + 1}. ${j.role} at ${j.company}`).join('\n');
-    const jobCtx  = jobDescText.slice(0, 2000);
+    // Build bullet list — include placeholder lines for jobs with no bullets
+    // so the LLM knows to generate content for every job
+    let bullNum = 0;
+    const bullLines = [];
+    resumeData.experience.forEach(job => {
+        const ctx = `${job.role}${job.company ? ' at ' + job.company : ''}`;
+        if (job.bullets.length > 0) {
+            job.bullets.forEach(b => { bullNum++; bullLines.push(`${bullNum}. [${ctx}] ${b}`); });
+        } else {
+            bullLines.push(`-- [${ctx}] (no existing bullets — generate 2–3 strong power statement bullets)`);
+        }
+    });
+    const bullStr = bullLines.join('\n');
 
     const userMessage =
-`You are an elite resume writer. Make this resume feel written specifically for this exact role — aligned in language, priorities, and framing.
+`You are an elite resume writer. Tailor this resume specifically for the role below.
 
 JOB POSTING:
 ${jobCtx}
 
 KEY SKILLS THIS ROLE REQUIRES: ${kwStr}
 
-RULES:
-- SUMMARY: Exactly 2 sentences. Open with the candidate's most relevant strength for THIS role. Mirror the job posting's vocabulary. No generic phrases like "results-driven" or "passionate about".
-- BULLETS: Start with an action verb. ≤22 words. Preserve all numbers/metrics exactly. Reframe to emphasize what THIS employer cares about. Do NOT invent facts.
-- BULLET COUNT: For each job, decide how relevant it is to this role. Write 3-5 bullets for highly relevant jobs, exactly 2 bullets for less relevant jobs. Never write more than 5 or fewer than 2 for any job.
-- Output ONLY the structured result below, nothing else.
+GOLDEN RULES — FOLLOW EXACTLY:
+- NO PERIODS: Do not end any bullet or summary sentence with a period
+- NO "I" OR "ME": Summary must be written without first-person pronouns ("Software Engineering student with..." not "I am...")
+- SUMMARY: Exactly 3 lines. Line 1 = who the candidate is + most relevant strength for THIS role. Line 2 = top 3 technical strengths (mirror job posting vocabulary). Line 3 = key soft skill or value they bring. No clichés like "results-driven" or "passionate about"
+- BULLETS: Strong action verb first (Spearheaded, Managed, Analyzed, etc). ≤22 words. Follow: [Action Verb] + [Quantifiable Task] + [Specific Result/Impact]. Preserve all numbers/metrics exactly. Do NOT invent facts
+- BULLET COUNT: 3–5 bullets for highly relevant jobs, exactly 2 for less relevant. EVERY job must have bullets — generate new ones for any job marked "(no existing bullets)"
+- Output ONLY the structured result below, nothing else
 ${atsResult && atsResult.missingRequired.length ? `
-IMPORTANT — KEYWORD GAP: The previous version scored ${atsResult.overall}%. These required keywords are MISSING — naturally weave as many as possible into the summary and bullets without forcing or inventing facts: ${atsResult.missingRequired.join(', ')}${atsResult.missingPreferred.length ? `\nAlso try to include these preferred keywords: ${atsResult.missingPreferred.slice(0, 8).join(', ')}` : ''}` : ''}
+KEYWORD GAP (previous score: ${atsResult.overall}%) — Naturally weave these MISSING required keywords into the output without inventing facts: ${atsResult.missingRequired.join(', ')}${atsResult.missingPreferred.length ? `\nAlso try to include: ${atsResult.missingPreferred.slice(0, 8).join(', ')}` : ''}` : ''}
 
-JOBS IN THIS RESUME:
+ALL JOBS (generate bullets for every one):
 ${jobList}
 
 OUTPUT FORMAT:
-SUMMARY: <rewritten summary>
+SUMMARY: <3-line summary — no periods, no I/Me>
 BULLETS:
-1. [Job Title at Company] <rewritten bullet>
-2. [Job Title at Company] <rewritten bullet>
-(group bullets by job, 3-5 for relevant jobs, 2 for less relevant — label every bullet with its job)
+1. [Job Title at Company] <bullet — no period at end>
+2. [Job Title at Company] <bullet — no period at end>
+(label every bullet with its job; generate fresh bullets for any job marked "no existing bullets")
 
 ${resumeData.summary ? `CURRENT SUMMARY:\n${resumeData.summary}\n` : ''}BULLETS TO REWRITE:
 ${bullStr}`;
@@ -132,15 +140,19 @@ ${bullStr}`;
     const raw  = data.choices?.[0]?.message?.content || '';
     console.log('[Groq] raw output:', raw.slice(0, 300));
 
-    // Parse summary
+    // Parse summary — strip trailing periods and first-person starts
     const sumMatch = raw.match(/SUMMARY:\s*(.+?)(?=\nBULLETS?|\n\n|$)/is);
     if (sumMatch) {
-        const s = sumMatch[1].trim();
+        let s = sumMatch[1].trim()
+            .replace(/\.\s*$/, '')                          // strip trailing period
+            .replace(/^I\s+(am|have|bring|offer)\b/i, ''); // strip leading "I am/have..."
         if (s.length > 20) resumeData.summary = s;
     }
 
-    // Parse bullets — clear all existing, reassign by job context tag
+    // Parse bullets — save backups first so a bad parse can't lose content
+    const bulletBackups = new Map(resumeData.experience.map(j => [j, [...j.bullets]]));
     resumeData.experience.forEach(j => j.bullets = []);
+
     const bullSection = raw.match(/BULLETS?:\s*([\s\S]+)/i)?.[1] || raw;
     const lines = bullSection.split('\n')
         .map(l => l.trim())
@@ -154,7 +166,18 @@ ${bullStr}`;
             ctx.toLowerCase().includes(j.role.toLowerCase()) ||
             ctx.toLowerCase().includes((j.company || '').toLowerCase())
         );
-        if (job && text.trim().length > 10) job.bullets.push(text.trim());
+        if (job && text.trim().length > 10) {
+            // Strip trailing period from each bullet
+            job.bullets.push(text.trim().replace(/\.\s*$/, ''));
+        }
+    });
+
+    // Safety net: if any job ended up with 0 bullets, restore from backup
+    resumeData.experience.forEach(j => {
+        if (j.bullets.length === 0) {
+            const backup = bulletBackups.get(j);
+            if (backup && backup.length > 0) j.bullets = backup;
+        }
     });
 }
 
@@ -497,19 +520,30 @@ function parseSkills(lines) {
 }
 
 function parseEducation(lines) {
+    // Matches "Expected May 2028", "May 2028", "Expected 2028", etc.
+    const EXPECTED_DATE_RE = /\b(?:Expected\s+)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}\b|\bExpected\s+\d{4}\b/i;
     const degs = []; let cur = null;
     for (const rawLine of lines) {
         const line = rawLine.trim(); if (!line) continue;
-        const dm = line.match(DATE_RANGE_RE) || line.match(/\b(19|20)\d{2}\b/);
+        const dm = line.match(DATE_RANGE_RE) || line.match(EXPECTED_DATE_RE) || line.match(/\b(19|20)\d{2}\b/);
         if (dm) {
-            if (cur && cur.degree) degs.push(cur);
-            const parts = line.replace(DATE_RANGE_RE, '').replace(/\b(19|20)\d{2}\b/, '').trim().split(/[|,]/).map(s => s.trim()).filter(Boolean);
-            cur = { degree: parts[0] || '', school: parts[1] || '', dates: dm[0] };
+            if (cur && (cur.school || cur.degree)) degs.push(cur);
+            const dateStr = dm[0];
+            // Remove the date and any trailing dash, then split by em-dash to get school + degree
+            const withoutDate = line.replace(dateStr, '').replace(/\s*[—–\-]\s*$/, '').trim();
+            const parts = withoutDate.split(/\s*[—–]\s*/).map(s => s.trim()).filter(Boolean);
+            // Detect whether the first part is a school name or a degree word
+            const firstIsDegree = parts[0] && /^(bachelor|master|associate|doctor|phd|bs|ms|ba|ma|mba)\b/i.test(parts[0]);
+            cur = {
+                school: firstIsDegree ? (parts[1] || '') : (parts[0] || ''),
+                degree: firstIsDegree ? (parts[0] || '') : (parts[1] || ''),
+                dates:  dateStr,
+            };
         } else if (cur) {
-            if (!cur.degree) cur.degree = line; else if (!cur.school) cur.school = line;
-        } else { cur = { degree: line, school: '', dates: '' }; }
+            if (!cur.school) cur.school = line; else if (!cur.degree) cur.degree = line;
+        } else { cur = { school: line, degree: '', dates: '' }; }
     }
-    if (cur && cur.degree) degs.push(cur);
+    if (cur && (cur.school || cur.degree)) degs.push(cur);
     return degs;
 }
 
@@ -687,12 +721,17 @@ function buildExpItem(job) {
 
 function buildEduItem(edu) {
     const d = document.createElement('div'); d.className = 'r-edu-item';
+    // Row 1: School name (bold, left) | Dates (right)
     const hdr = document.createElement('div'); hdr.className = 'r-edu-header';
-    const deg = document.createElement('span'); deg.className = 'r-edu-degree'; deg.textContent = edu.degree || '';
+    const sch = document.createElement('span'); sch.className = 'r-edu-degree'; sch.textContent = edu.school || edu.degree || '';
     const dates = document.createElement('span'); dates.className = 'r-edu-dates'; dates.textContent = edu.dates || '';
-    hdr.append(deg, dates);
-    const sch = document.createElement('div'); sch.className = 'r-edu-school'; sch.textContent = edu.school || '';
-    d.append(hdr, sch);
+    hdr.append(sch, dates);
+    d.appendChild(hdr);
+    // Row 2: Degree name (smaller, below) — only if both fields are present
+    if (edu.degree && edu.school) {
+        const deg = document.createElement('div'); deg.className = 'r-edu-school'; deg.textContent = edu.degree;
+        d.appendChild(deg);
+    }
     return d;
 }
 
