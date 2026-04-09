@@ -813,23 +813,25 @@ async function handleGenerate() {
 
     // Cache keywords per job description — re-extract only if job desc changed
     if (!session || session.jobDescText !== jobDescText) {
-        session = { keywords: null, jobDescText, atsResult: null, count: 0 };
+        session = { keywords: null, jobDescText, atsResult: null, resumeData: null, count: 0 };
     }
-    const isRefinement = session.count > 0 && session.atsResult;
-    initProgress(isRefinement ? 5 : 8);
+    const isRefinement = session.count > 0 && session.atsResult && session.resumeData;
+    initProgress(isRefinement ? 4 : 8);
 
     try {
-        log('Parsing master resume…');
-        const resumeData = parseResume(masterText);
-
         if (!session.keywords) {
             log('Analyzing job description…');
             session.keywords = extractKeywords(jobDescText);
         }
         const { keywords } = session;
 
+        // Use stored tailored data on refinements; parse fresh on first run
+        const resumeData = isRefinement
+            ? session.resumeData
+            : (log('Parsing master resume…'), parseResume(masterText));
+
         if (isRefinement) {
-            // Subsequent clicks — single targeted pass with ATS gap context
+            // Subsequent clicks — single targeted pass on already-tailored data
             log(`Refining (score was ${session.atsResult.overall}%) — targeting gaps…`);
             await tailorWithGroq(resumeData, keywords, jobDescText, session.atsResult);
         } else {
@@ -855,6 +857,7 @@ async function handleGenerate() {
         const atsResult = scoreATS(resumeData, keywords);
         renderATS(atsResult);
         session.atsResult = atsResult;
+        session.resumeData = resumeData;
         session.count++;
 
         finishProgress();
