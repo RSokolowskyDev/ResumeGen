@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ResumeGen · Claude AI</title>
+    <link rel="stylesheet" href="index.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+</head>
+<body>
+
+<div id="app-wrapper">
+
+    <nav class="top-nav">
+        <div class="logo">resumegen ✦ <span class="mode-badge claude-badge">Claude AI</span></div>
+
+        <div class="model-status">
+            <span id="model-dot" class="status-dot loading"></span>
+            <span id="model-status-text">Enter API key to activate</span>
+        </div>
+
+        <div class="nav-actions">
+            <a href="index.html" class="nav-btn secondary mode-switch-btn">⚡ Local AI</a>
+            <button id="reset-btn" class="nav-btn secondary" disabled>Reset</button>
+            <button id="pdf-btn" class="nav-btn primary" disabled>Save PDF</button>
+        </div>
+    </nav>
+
+    <!-- Main Split Layout -->
+    <div id="main-content">
+
+        <!-- Left Panel -->
+        <div id="left-panel">
+
+            <!-- API Key Input -->
+            <div id="api-key-panel" class="api-key-panel">
+                <div class="api-key-label">Claude API Key</div>
+                <div class="api-key-row">
+                    <input type="password" id="api-key-input" placeholder="sk-ant-api03-…" autocomplete="off">
+                    <button id="api-key-save" class="api-key-save-btn">Save</button>
+                </div>
+                <div class="api-key-hint">Stored in localStorage only. Never sent anywhere except Anthropic.</div>
+            </div>
+
+            <div class="input-group">
+                <div class="input-label-row">
+                    <label>Master Resume</label>
+                    <label class="file-upload-btn">
+                        ↑ Upload file
+                        <input type="file" id="file-master" accept=".txt,.md,.pdf,.doc,.docx,.rtf" hidden>
+                    </label>
+                </div>
+                <textarea
+                    id="master-resume-input"
+                    placeholder="Paste your full master resume here…&#10;&#10;Tip: Include everything — Claude picks what's most relevant."
+                ></textarea>
+            </div>
+
+            <div class="input-group">
+                <div class="input-label-row">
+                    <label>Job Description</label>
+                    <label class="file-upload-btn">
+                        ↑ Upload file
+                        <input type="file" id="file-job" accept=".txt,.md,.pdf,.doc,.docx,.rtf" hidden>
+                    </label>
+                </div>
+                <textarea
+                    id="job-desc-input"
+                    placeholder="Paste the full job description here…"
+                ></textarea>
+            </div>
+
+            <button id="generate-btn" class="generate-btn claude-generate-btn" disabled>
+                Generate with Claude
+            </button>
+
+            <div id="status-log">
+                <div id="gen-progress-bar">
+                    <div id="gen-progress-fill"></div>
+                </div>
+                <div id="status-messages"></div>
+            </div>
+
+            <!-- ATS Score Panel -->
+            <div id="ats-panel">
+                <div class="ats-title">ATS Match Score</div>
+                <div class="ats-overall">
+                    <div class="ats-score-num" id="ats-score-num">—</div>
+                    <div class="ats-bar-wrap">
+                        <div class="ats-bar">
+                            <div class="ats-bar-fill" id="ats-bar-fill" style="width:0%"></div>
+                        </div>
+                        <div class="ats-bar-label" id="ats-bar-label">Keyword match</div>
+                    </div>
+                </div>
+                <div class="ats-counts" id="ats-counts"></div>
+                <div class="ats-missing" id="ats-missing-required" style="display:none">
+                    <div class="ats-missing-label">Missing (required)</div>
+                    <div class="ats-keyword-list" id="ats-missing-required-list"></div>
+                </div>
+                <div class="ats-missing" id="ats-missing-preferred" style="display:none">
+                    <div class="ats-missing-label">Missing (preferred)</div>
+                    <div class="ats-keyword-list" id="ats-missing-preferred-list"></div>
+                </div>
+                <div class="ats-sections" id="ats-sections"></div>
+            </div>
+
+        </div>
+
+        <!-- Right Panel -->
+        <div id="right-panel">
+            <div id="resume-output">
+                <div class="resume-placeholder">
+                    <div class="placeholder-icon">📄</div>
+                    <p>Your tailored resume will appear here</p>
+                    <small>Paste your resume + job description, then click Generate</small>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<div id="print-target" style="display:none;"></div>
+
+<template id="resume-tpl">
+    <div class="resume-page">
+        <header class="r-header">
+            <h1 class="r-name" data-slot="name">Your Name</h1>
+            <div class="r-contact">
+                <span data-slot="email"></span>
+                <span class="r-sep" data-hide-if-empty="phone">|</span>
+                <span data-slot="phone"></span>
+                <span class="r-sep" data-hide-if-empty="location">|</span>
+                <span data-slot="location"></span>
+                <span class="r-sep" data-hide-if-empty="linkedin">|</span>
+                <span data-slot="linkedin"></span>
+            </div>
+        </header>
+        <section class="r-section" data-hide-if-empty="summary">
+            <h2 class="r-section-title">Professional Summary</h2>
+            <p class="r-summary" data-slot="summary"></p>
+        </section>
+        <section class="r-section" id="tpl-experience-section">
+            <h2 class="r-section-title">Experience</h2>
+            <div data-repeat="experience"></div>
+        </section>
+        <section class="r-section" data-hide-if-empty="skills">
+            <h2 class="r-section-title">Skills</h2>
+            <div class="r-skills" data-slot="skills"></div>
+        </section>
+        <section class="r-section" id="tpl-education-section">
+            <h2 class="r-section-title">Education</h2>
+            <div data-repeat="education"></div>
+        </section>
+    </div>
+</template>
+
+<script type="module" src="claude.js"></script>
+</body>
+</html>
