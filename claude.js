@@ -163,6 +163,7 @@ async function tailorWithClaude(resumeData, keywords, jobDescText) {
 
     const kwStr    = keywords.all.slice(0, 15).join(', ');
     const bullStr  = bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n');
+    const jobList  = resumeData.experience.map((j, i) => `${i + 1}. ${j.role} at ${j.company}`).join('\n');
     // Send the first 2000 chars of the job description for full context
     const jobCtx   = jobDescText.slice(0, 2000);
 
@@ -177,15 +178,19 @@ KEY SKILLS THIS ROLE REQUIRES: ${kwStr}
 RULES:
 - SUMMARY: Exactly 2 sentences. Open with the candidate's most relevant strength for THIS role. Mirror the job posting's vocabulary and priorities. No generic phrases like "results-driven" or "passionate about".
 - BULLETS: Start with an action verb. ≤22 words. Preserve all numbers/metrics exactly. Reframe each bullet to emphasize what THIS employer cares about. Do NOT invent facts or add new metrics.
+- BULLET COUNT: For each job, decide how relevant it is to this role. Write 3-5 bullets for highly relevant jobs, exactly 2 bullets for less relevant jobs. Never write more than 5 or fewer than 2 for any job.
 - Only rewrite bullets that are relevant — keep the rest as close to the original as possible.
 - Output ONLY the structured result below, nothing else.
+
+JOBS IN THIS RESUME:
+${jobList}
 
 OUTPUT FORMAT:
 SUMMARY: <rewritten summary>
 BULLETS:
-1. <rewritten bullet>
-2. <rewritten bullet>
-(continue for all ${bulletRefs.length} bullets)
+1. [Job Title at Company] <rewritten bullet>
+2. [Job Title at Company] <rewritten bullet>
+(group bullets by job, 3-5 for relevant jobs, 2 for less relevant — label every bullet with its job)
 
 ${resumeData.summary ? `CURRENT SUMMARY:\n${resumeData.summary}\n` : ''}BULLETS TO REWRITE:
 ${bullStr}`;

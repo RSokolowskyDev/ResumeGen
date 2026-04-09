@@ -73,6 +73,7 @@ async function tailorWithGroq(resumeData, keywords, jobDescText) {
 
     const kwStr   = keywords.all.slice(0, 15).join(', ');
     const bullStr = bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n');
+    const jobList = resumeData.experience.map((j, i) => `${i + 1}. ${j.role} at ${j.company}`).join('\n');
     const jobCtx  = jobDescText.slice(0, 2000);
 
     const userMessage =
@@ -86,14 +87,18 @@ KEY SKILLS THIS ROLE REQUIRES: ${kwStr}
 RULES:
 - SUMMARY: Exactly 2 sentences. Open with the candidate's most relevant strength for THIS role. Mirror the job posting's vocabulary. No generic phrases like "results-driven" or "passionate about".
 - BULLETS: Start with an action verb. ≤22 words. Preserve all numbers/metrics exactly. Reframe to emphasize what THIS employer cares about. Do NOT invent facts.
+- BULLET COUNT: For each job, decide how relevant it is to this role. Write 3-5 bullets for highly relevant jobs, exactly 2 bullets for less relevant jobs. Never write more than 5 or fewer than 2 for any job.
 - Output ONLY the structured result below, nothing else.
+
+JOBS IN THIS RESUME:
+${jobList}
 
 OUTPUT FORMAT:
 SUMMARY: <rewritten summary>
 BULLETS:
-1. <rewritten bullet>
-2. <rewritten bullet>
-(continue for all ${bulletRefs.length} bullets)
+1. [Job Title at Company] <rewritten bullet>
+2. [Job Title at Company] <rewritten bullet>
+(group bullets by job, 3-5 for relevant jobs, 2 for less relevant — label every bullet with its job)
 
 ${resumeData.summary ? `CURRENT SUMMARY:\n${resumeData.summary}\n` : ''}BULLETS TO REWRITE:
 ${bullStr}`;
@@ -131,17 +136,22 @@ ${bullStr}`;
         if (s.length > 20) resumeData.summary = s;
     }
 
-    // Parse bullets
+    // Parse bullets — clear all existing, reassign by job context tag
+    resumeData.experience.forEach(j => j.bullets = []);
     const bullSection = raw.match(/BULLETS?:\s*([\s\S]+)/i)?.[1] || raw;
     const lines = bullSection.split('\n')
         .map(l => l.trim())
         .filter(l => /^\d+[.)]\s+\S/.test(l));
 
-    lines.forEach((line, i) => {
-        const ref = bulletRefs[i];
-        if (!ref) return;
-        const text = line.replace(/^\d+[.)]\s+(?:\[.*?\]\s*)?/, '').trim();
-        if (text.length > 10) resumeData.experience[ref.ji].bullets[ref.bi] = text;
+    lines.forEach(line => {
+        const tagMatch = line.match(/^\d+[.)]\s+\[(.+?)\]\s+(.*)/);
+        if (!tagMatch) return;
+        const [, ctx, text] = tagMatch;
+        const job = resumeData.experience.find(j =>
+            ctx.toLowerCase().includes(j.role.toLowerCase()) ||
+            ctx.toLowerCase().includes((j.company || '').toLowerCase())
+        );
+        if (job && text.trim().length > 10) job.bullets.push(text.trim());
     });
 }
 
