@@ -183,6 +183,18 @@ async function loadModel() {
     dom.resetBtn.disabled    = false;
 }
 
+/**
+ * SENTINEL TRANSFORMATION PROMPT (Use this in Gemini/GPT-4 to prepare your data):
+ *
+ * "Act as a Data Architect. Convert my resume into the 'Sentinel Optimized Database' format.
+ * Rules:
+ * 1. Use '# SECTION_NAME' for headers (CONTACT, SUMMARY, EXPERIENCE, SKILLS, EDUCATION).
+ * 2. For Experience, use exactly: 'Company — Location' on one line, then 'Role — Dates' on the next.
+ * 3. Use ' — ' (em-dash with spaces) as the separator.
+ * 4. Keep every bullet point under 25 words.
+ * 5. Output raw text only."
+ */
+
 // ── AI GENERATION ─────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = 'You are a resume writer. Output ONLY the rewritten text, nothing else. No explanations, no quotes, no labels.';
