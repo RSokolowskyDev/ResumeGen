@@ -181,72 +181,72 @@ ${bullStr}`;
     });
 }
 
-const TRANSFORMATION_PROMPT = `You are a Career Data Architect. Convert the resume below into a "Sentinel Master Database" — a single comprehensive record of everything in my career. This database will be used by an AI to generate highly targeted resumes for specific job descriptions later. Capture more than you think is needed.
+const TRANSFORMATION_PROMPT = `You are a Career Data Architect. Convert the resume below into a Career Master Database — a single comprehensive record of everything in my career. This database will be used by an AI to generate highly targeted resumes for specific job descriptions later. Capture more than you think is needed.
 
 STRICT FORMAT RULES (the parser depends on these exactly):
-• Section headers must be exactly: # CONTACT, # SUMMARY, # EXPERIENCE, # SKILLS, # EDUCATION
-• Use ' — ' (space, em-dash, space) as the separator between all fields
-• Every experience bullet must start with a strong action verb
-• Preserve ALL numbers, percentages, dollar amounts, and metrics exactly as written
-• Include EVERY job, every bullet, every skill — nothing omitted
-• Output plain text only — no markdown asterisks, no bold, no tables
+- Section headers must be exactly: # CONTACT, # SUMMARY, # EXPERIENCE, # SKILLS, # EDUCATION
+- Use ' - ' (space, dash, space) as the separator between all fields
+- Every experience bullet must start with a strong action verb
+- Preserve ALL numbers, percentages, dollar amounts, and metrics exactly as written
+- Include EVERY job, every bullet, every skill - nothing omitted
+- Output plain text only - no markdown asterisks, no bold, no tables
 
-═══════════════════════════════════════════════
+===============================================
 FORMAT REFERENCE (fill with your real data):
-═══════════════════════════════════════════════
+===============================================
 
 # CONTACT
 Full Name
-email@example.com — (555) 000-0000 — City, State
+email@example.com - (555) 000-0000 - City, State
 LinkedIn: linkedin.com/in/username
 GitHub: github.com/username
 Portfolio: yoursite.com
 
 # SUMMARY
-[Write 4-6 sentences covering: total years of experience, all core domains you work across, your top 5-6 technical strengths, the types of teams/company sizes you've worked in, and one differentiator that makes you stand out. This will be cut down to 2 sentences per job application — be exhaustive here.]
+[Write 4-6 sentences covering: total years of experience, all core domains you work across, your top 5-6 technical strengths, the types of teams/company sizes you've worked in, and one differentiator that makes you stand out. This will be cut down to 3 lines per job application - be exhaustive here.]
 
 # EXPERIENCE
 [Every position, reverse chronological. Use this exact structure for each:]
 
-Company Name — City, State
-Job Title — Month Year — Month Year
-• [Action verb] + [what you did] + [scale/scope] + [tools/methods] + [quantified outcome]
-• [Include every bullet point, even minor ones — coverage matters]
-• [Add team size, budget, or user count wherever you know it]
-• [If a result isn't quantified, describe the impact in concrete terms]
+Company Name - City, State
+Job Title - Month Year - Month Year
+- [Action verb] + [what you did] + [scale/scope] + [tools/methods] + [quantified outcome]
+- [Include every bullet point, even minor ones - coverage matters]
+- [Add team size, budget, or user count wherever you know it]
+- [If a result isn't quantified, describe the impact in concrete terms]
 
 [Repeat for every position including internships, part-time, freelance, contract]
 
 # SKILLS
-[Group by category — be exhaustive, include everything you've touched professionally]
+[Group by category - be exhaustive, include everything you've touched professionally]
 Languages: Python, JavaScript, TypeScript, SQL, Java, ...
 Frameworks & Libraries: React, Node.js, FastAPI, Django, ...
 Cloud & DevOps: AWS, GCP, Docker, Kubernetes, CI/CD, ...
 Databases: PostgreSQL, MySQL, MongoDB, Redis, ...
 Tools & Platforms: Git, Jira, Figma, Linux, ...
-Certifications: AWS Solutions Architect — Amazon — 2023, ...
+Certifications: AWS Solutions Architect - Amazon - 2023, ...
 Methodologies: Agile, Scrum, TDD, REST API design, ...
 Soft Skills: Cross-functional leadership, stakeholder communication, ...
 
 # EDUCATION
 [Each degree on its own block:]
-Degree Type — Major — University Name — Graduation Year
-GPA: X.X — Dean's List — Magna Cum Laude (include if notable)
+Degree Type - Major - University Name - Graduation Year
+GPA: X.X - Dean's List - Magna Cum Laude (include if notable)
 Relevant Coursework: Course 1, Course 2, Course 3
 Honors & Awards: [any academic recognition]
 
 [Include bootcamps, online certificates, continuing education if relevant]
 
-═══════════════════════════════════════════════
+===============================================
 Now convert my resume using the format above:
 [PASTE YOUR FULL RESUME BELOW THIS LINE]
-═══════════════════════════════════════════════`;
+===============================================`;
 
 const handleDownloadTemplate = () => {
     // Use a Blob URL so the fresh window has no conflicting print CSS
     const escaped = TRANSFORMATION_PROMPT.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const html = `<!DOCTYPE html>
-<html><head><title>Sentinel Master Database</title>
+<html><head><meta charset="UTF-8"><title>Career Master Database</title>
 <style>
   body { font-family: Georgia, serif; margin: 0; padding: 0; }
   .page { padding: 0.6in; box-sizing: border-box; }
@@ -261,7 +261,7 @@ const handleDownloadTemplate = () => {
 </style>
 </head><body>
 <div class="page">
-  <h1>Sentinel Master Database</h1>
+  <h1>Career Master Database</h1>
   <p class="subtitle">Step 1 of 2 — Use this prompt in Claude, ChatGPT, or any AI to build your career database. Paste the result into the Master Resume field in ResumeGen. The AI will then specialize it per job.</p>
   <hr>
   <h2>PROMPT — COPY EVERYTHING BELOW INTO YOUR AI</h2>
@@ -269,7 +269,7 @@ const handleDownloadTemplate = () => {
 </div>
 <script>window.onload = () => { window.print(); };<\/script>
 </body></html>`;
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
     window.open(url, '_blank');
     // Revoke after a delay to allow the new tab to load
     setTimeout(() => URL.revokeObjectURL(url), 10000);
