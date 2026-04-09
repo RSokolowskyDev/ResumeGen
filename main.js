@@ -451,14 +451,14 @@ function parseExperience(lines) {
         if (!line) continue;
         const dm         = line.match(DATE_RANGE_RE);
         const isBullet   = /^[•\-\*]\s+|^\d+\.\s+/.test(line);
-        const hasEmDash  = /[—–]/.test(line);
+        const hasDash    = /[—–\-]/.test(line);
 
         if (dm) {
             // Line contains a date range → this is the role line
             if (cur) jobs.push(cur);
             const withoutDate = line.replace(DATE_RANGE_RE, '').trim();
             // Role may be "Role — Company" or just "Role"
-            const parts = withoutDate.split(/\s*[—–]\s*/).map(s => s.trim()).filter(Boolean);
+            const parts = withoutDate.split(/\s+[—–\-]\s+|\s*[—–]\s*/).map(s => s.trim()).filter(Boolean);
             cur = {
                 role:     parts[0] || '',
                 company:  pendingCo ? pendingCo.name : (parts[1] || ''),
@@ -467,9 +467,9 @@ function parseExperience(lines) {
                 bullets:  [],
             };
             pendingCo = null;
-        } else if (hasEmDash && !isBullet && !cur?.bullets?.length) {
+        } else if (hasDash && !isBullet && !cur?.bullets?.length) {
             // Company — Location header (no date, no bullets yet) → store for next role line
-            const dashIdx = line.search(/[—–]/);
+            const dashIdx = line.search(/[—–\-]/);
             pendingCo = { name: line.slice(0, dashIdx).trim(), loc: line.slice(dashIdx + 1).trim() };
         } else if (isBullet) {
             if (cur) cur.bullets.push(line.replace(/^[•\-\*\d]+\.?\s+/, '').trim());
@@ -667,11 +667,16 @@ function buildExpItem(job) {
     const role = document.createElement('span'); role.className = 'r-exp-role'; role.textContent = job.role || '';
     const dates = document.createElement('span'); dates.className = 'r-exp-dates'; dates.textContent = job.dates || '';
     hdr.append(role, dates);
-    const sub = document.createElement('div'); sub.className = 'r-exp-subheader';
-    const co = document.createElement('span'); co.className = 'r-exp-company'; co.textContent = job.company || '';
-    const loc = document.createElement('span'); loc.className = 'r-exp-location'; loc.textContent = job.location || '';
-    sub.append(co, loc);
-    d.append(hdr, sub);
+    d.appendChild(hdr);
+
+    if (job.company || job.location) {
+        const sub = document.createElement('div'); sub.className = 'r-exp-subheader';
+        const co = document.createElement('span'); co.className = 'r-exp-company'; co.textContent = job.company || '';
+        const loc = document.createElement('span'); loc.className = 'r-exp-location'; loc.textContent = job.location || '';
+        sub.append(co, loc);
+        d.appendChild(sub);
+    }
+
     if (job.bullets?.length) {
         const ul = document.createElement('ul'); ul.className = 'r-bullets';
         job.bullets.forEach(b => { const li = document.createElement('li'); li.textContent = b; ul.appendChild(li); });

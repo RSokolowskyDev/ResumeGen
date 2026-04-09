@@ -346,10 +346,10 @@ function parseExperience(lines) {
         const line = lines[i].trim();
         const next = lines[i + 1]?.trim() || '';
         if (!line) { joined.push(''); continue; }
-        if (next && /[—–]/.test(next) && !next.match(DATE_RANGE_RE) && !line.match(DATE_RANGE_RE)) {
+        if (next && /[—–\-]/.test(next) && !next.match(DATE_RANGE_RE) && !line.match(DATE_RANGE_RE)) {
             joined.push(line + ' ' + next); i++; continue;
         }
-        if (/[—–]/.test(line) && !line.match(/,\s*[A-Z]{2}\b/) && !line.match(DATE_RANGE_RE)
+        if (/[—–\-]/.test(line) && !line.match(/,\s*[A-Z]{2}\b/) && !line.match(DATE_RANGE_RE)
             && next && /^[A-Z][a-z]/.test(next) && next.match(/,\s*[A-Z]{2}\b/)) {
             joined.push(line + ' ' + next); i++; continue;
         }
@@ -362,12 +362,12 @@ function parseExperience(lines) {
         if (!line) continue;
         const dm        = line.match(DATE_RANGE_RE);
         const isBullet  = /^[•\-\*]\s+|^\d+\.\s+/.test(line);
-        const hasEmDash = /[—–]/.test(line);
+        const hasDash   = /[—–\-]/.test(line);
 
         if (dm) {
             if (cur) jobs.push(cur);
             const withoutDate = line.replace(DATE_RANGE_RE, '').trim();
-            const parts = withoutDate.split(/\s*[—–]\s*/).map(s => s.trim()).filter(Boolean);
+            const parts = withoutDate.split(/\s+[—–\-]\s+|\s*[—–]\s*/).map(s => s.trim()).filter(Boolean);
             cur = {
                 role:     parts[0] || '',
                 company:  pendingCo ? pendingCo.name : (parts[1] || ''),
@@ -376,8 +376,8 @@ function parseExperience(lines) {
                 bullets:  [],
             };
             pendingCo = null;
-        } else if (hasEmDash && !isBullet && !cur?.bullets?.length) {
-            const dashIdx = line.search(/[—–]/);
+        } else if (hasDash && !isBullet && !cur?.bullets?.length) {
+            const dashIdx = line.search(/[—–\-]/);
             pendingCo = { name: line.slice(0, dashIdx).trim(), loc: line.slice(dashIdx + 1).trim() };
         } else if (isBullet) {
             if (cur) cur.bullets.push(line.replace(/^[•\-\*\d]+\.?\s+/, '').trim());
