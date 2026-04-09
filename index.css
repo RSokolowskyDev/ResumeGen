@@ -414,6 +414,66 @@ textarea::placeholder { color: var(--text-muted); opacity: 0.8; }
     animation: shimmer 1.5s ease-in-out infinite;
 }
 
+/* ── SECTION ORDER PANEL ────────────────────────────────────────── */
+
+#section-order-panel {
+    background: var(--bg-subtle, #f5f3ff);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md, 8px);
+    padding: 10px 12px;
+}
+
+.section-order-label {
+    font-size: 9pt;
+    font-weight: 600;
+    color: var(--text-secondary, #555);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 8px;
+}
+
+.section-order-hint {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    opacity: 0.6;
+    font-size: 8.5pt;
+}
+
+#section-order-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.section-chip {
+    background: var(--bg-surface, #fff);
+    border: 1.5px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 9pt;
+    font-weight: 600;
+    color: var(--text-primary, #1a1a2e);
+    cursor: grab;
+    user-select: none;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+
+.section-chip:hover {
+    border-color: #7c3aed;
+    color: #7c3aed;
+}
+
+.section-chip.dragging {
+    opacity: 0.35;
+    cursor: grabbing;
+}
+
+.section-chip.drag-over {
+    border-color: #7c3aed;
+    background: #ede9fe;
+}
+
 @keyframes shimmer {
     0%, 100% { opacity: 1; }
     50%       { opacity: 0.8; }

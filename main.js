@@ -31,6 +31,8 @@ const dom = {
     fileJob:                document.getElementById('file-job'),
     printTarget:            document.getElementById('print-target'),
     resumeTpl:              document.getElementById('resume-tpl'),
+    sectionOrderPanel:      document.getElementById('section-order-panel'),
+    sectionOrderList:       document.getElementById('section-order-list'),
 };
 
 let isGenerating = false;
@@ -137,7 +139,7 @@ ${bullStr}`;
     }
 
     const data = await resp.json();
-    const raw  = data.choices?.[0]?.message?.content || '';
+    const raw = cleanOutput(data.choices?.[0]?.message?.content || '');
     console.log('[Groq] raw output:', raw.slice(0, 300));
 
     // Parse summary — strip trailing periods and first-person starts
@@ -303,9 +305,31 @@ async function generate(userPrompt, maxTokens = 1200) {
 
 function cleanOutput(raw) {
     return raw
-        .replace(/^["']|["']$/g, '')
+        .replace(/\[cite_start\]/gi, '')
+        .replace(/\[cite: \d+(?:,\s*\d+)*\]/gi, '')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+function ensurePastTense(text) {
+    const map = {
+        'Manage': 'Managed', 'Lead': 'Led', 'Guide': 'Guided', 'Build': 'Built', 'Develop': 'Developed',
+        'Create': 'Created', 'Teach': 'Taught', 'Support': 'Supported', 'Resolve': 'Resolved',
+        'Analyze': 'Analyzed', 'Utilize': 'Utilized', 'Improve': 'Improved', 'Maintain': 'Maintained',
+        'Ensure': 'Ensured', 'Coordinate': 'Coordinated', 'Collaborate': 'Collaborated',
+        'Conduct': 'Conducted', 'Direct': 'Directed', 'Implement': 'Implemented', 'Increase': 'Increased'
+    };
+    // Replace first word if it matches (case insensitive)
+    const firstWord = text.match(/^\w+/)?.[0];
+    if (firstWord && map[firstWord]) {
+        return text.replace(new RegExp(`^${firstWord}`, 'i'), map[firstWord]);
+    }
+    // Also catch some common "ing" starts
+    if (text.match(/^\w+ing\b/i)) {
+        const verb = text.match(/^\w+(?=ing)/i)[0];
+        if (map[verb]) return text.replace(/^\w+ing/i, map[verb]);
+    }
+    return text;
 }
 
 // Single batched call — tailor summary + all bullets in one shot
@@ -331,7 +355,8 @@ async function tailorAll(resumeData, keywords) {
         `You are a resume writer. Select and rewrite only the most relevant bullets for a role requiring: ${kwStr}.\n\n` +
         `Rules:\n` +
         `- SUMMARY: 2 sentences, professional, include relevant keywords.\n` +
-        `- BULLETS: action verb start, ≤22 words each, keep all numbers/metrics. Include [Company] context tag.\n` +
+        `- BULLETS: Start with a strong PAST-TENSE action verb (e.g., "Led", "Guided", "Developed"). ≤22 words each. Keep all numbers/metrics. Include [Company] context tag.\n` +
+        `- NO CITATIONS: Do not include any [cite] tags or numbers in brackets.\n` +
         `- Output ONLY the rewritten content in this exact format:\n` +
         `SUMMARY: <rewritten summary>\n` +
         `BULLETS:\n1. [Company Name] <bullet>\n2. [Company Name] <bullet>\n...\n\n` +
@@ -482,7 +507,7 @@ function parseExperience(lines) {
         joined.push(line);
     }
 
-    const jobs = []; let cur = null; let pendingCo = null;
+    const jobs = []; let cur = null; let pendingCo = null; let pendingDate = null;
     for (const rawLine of joined) {
         const line = rawLine.trim();
         if (!line) continue;
@@ -491,23 +516,39 @@ function parseExperience(lines) {
         const hasDash    = /[—–\-]/.test(line);
 
         if (dm) {
+            const withoutDate = line.replace(DATE_RANGE_RE, '').trim();
+            // If the line is ONLY a date (nothing else), save it for the next real role line
+            // to avoid creating a phantom empty-role job entry
+            if (!withoutDate && !pendingCo) {
+                pendingDate = dm[0].trim();
+                continue;
+            }
             // Line contains a date range → this is the role line
             if (cur) jobs.push(cur);
-            const withoutDate = line.replace(DATE_RANGE_RE, '').trim();
             // Role may be "Role — Company" or just "Role"
             const parts = withoutDate.split(/\s+[—–\-]\s+|\s*[—–]\s*/).map(s => s.trim()).filter(Boolean);
             cur = {
                 role:     parts[0] || '',
                 company:  pendingCo ? pendingCo.name : (parts[1] || ''),
                 location: pendingCo ? pendingCo.loc  : (parts[2] || ''),
-                dates:    dm[0].trim(),
+                dates:    pendingDate || dm[0].trim(),
                 bullets:  [],
             };
+            pendingDate = null;
             pendingCo = null;
         } else if (hasDash && !isBullet && !cur?.bullets?.length) {
-            // Company — Location header (no date, no bullets yet) → store for next role line
+            // Company — Location header (no date, no bullets yet)
             const dashIdx = line.search(/[—–\-]/);
-            pendingCo = { name: line.slice(0, dashIdx).trim(), loc: line.slice(dashIdx + 1).trim() };
+            const name = line.slice(0, dashIdx).trim();
+            const loc  = line.slice(dashIdx + 1).trim();
+
+            // If the "location" part looks like a date range, it's actually dates
+            if (DATE_RANGE_RE.test(loc) && !pendingDate) {
+                pendingDate = loc;
+                pendingCo = { name, loc: '' };
+            } else {
+                pendingCo = { name, loc };
+            }
         } else if (isBullet) {
             if (cur) cur.bullets.push(line.replace(/^[•\-\*\d]+\.?\s+/, '').trim());
         } else if (cur) {
@@ -520,7 +561,8 @@ function parseExperience(lines) {
         }
     }
     if (cur) jobs.push(cur);
-    return jobs;
+    // Filter out phantom entries (no role and no company) — these are date-only artifacts
+    return jobs.filter(j => j.role || j.company);
 }
 
 function parseSkills(lines) {
@@ -682,6 +724,17 @@ function renderResume(data) {
     }
 
     if (!data.summary) page.querySelector('[data-hide-if-empty="summary"]')?.remove();
+
+    const sections = Array.from(page.querySelectorAll('.r-section'));
+    const orderChips = Array.from(dom.sectionOrderList.querySelectorAll('.section-chip'));
+    const desiredOrder = orderChips.map(c => c.dataset.section);
+
+    // Reorder sections in DOM based on desiredOrder
+    const container = page.querySelector('.resume-page');
+    desiredOrder.forEach(secName => {
+        const secEl = sections.find(s => s.dataset.section === secName);
+        if (secEl) container.appendChild(secEl);
+    });
 
     const expCont = page.querySelector('[data-repeat="experience"]');
     if (expCont) {
@@ -905,6 +958,13 @@ async function handleGenerate() {
             await tailorWithGroq(resumeData, keywords, jobDescText, pass1);
         }
 
+        // Post-process bullets for past tense and polish
+        resumeData.experience.forEach(j => {
+            j.bullets = j.bullets.map(b => ensurePastTense(b));
+        });
+
+        dom.sectionOrderPanel.style.display = 'block';
+
         log('Reordering skills by relevance…');
         resumeData.skills = reorderSkills(resumeData.skills, keywords.all);
 
@@ -975,7 +1035,53 @@ async function handleFileUpload(inputEl, targetTextarea) {
     inputEl.value = '';
 }
 
+// ── DRAG AND DROP ────────────────────────────────────────────────────────────
+
+function initDragAndDrop() {
+    const list = dom.sectionOrderList;
+    let draggedItem = null;
+
+    list.addEventListener('dragstart', (e) => {
+        draggedItem = e.target;
+        e.target.classList.add('dragging');
+    });
+
+    list.addEventListener('dragend', (e) => {
+        draggedItem = null;
+        e.target.classList.remove('dragging');
+        // Re-render preview immediately when order changes
+        if (session && session.resumeData) renderResume(session.resumeData);
+    });
+
+    list.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const afterElement = getDragAfterElement(list, e.clientY);
+        const currentDraggedItem = document.querySelector('.dragging');
+        if (afterElement == null) {
+            list.appendChild(currentDraggedItem);
+        } else {
+            list.insertBefore(currentDraggedItem, afterElement);
+        }
+    });
+}
+
+function getDragAfterElement(container, y) {
+    const draggableElements = [...container.querySelectorAll('.section-chip:not(.dragging)')];
+
+    return draggableElements.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+            return { offset: offset, element: child };
+        } else {
+            return closest;
+        }
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+}
+
 // ── EVENT LISTENERS (registered immediately on script parse) ──────────────────
+
+initDragAndDrop();
 
 dom.generateBtn.addEventListener('click', handleGenerate);
 dom.resetBtn.addEventListener('click', handleReset);

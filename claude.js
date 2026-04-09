@@ -35,6 +35,8 @@ const dom = {
     apiKeyInput:            document.getElementById('api-key-input'),
     apiKeySave:             document.getElementById('api-key-save'),
     apiKeyPanel:            document.getElementById('api-key-panel'),
+    sectionOrderPanel:      document.getElementById('section-order-panel'),
+    sectionOrderList:       document.getElementById('section-order-list'),
 };
 
 let isGenerating = false;
@@ -42,72 +44,70 @@ let session = null; // { keywords, jobDescText, atsResult, count }
 
 // ── TRANSFORMATION PROMPT + MODAL ─────────────────────────────────────────────
 
-const TRANSFORMATION_PROMPT = `You are a Career Data Architect. Convert the resume below into a "Sentinel Master Database" — a single comprehensive record of everything in my career. This database will be used by an AI to generate highly targeted resumes for specific job descriptions later. Capture more than you think is needed.
+const TRANSFORMATION_PROMPT = `You are a Career Data Architect. Convert the resume below into a Career Master Database — a single comprehensive record of everything in my career. This database will be used by an AI to generate highly targeted resumes for specific job descriptions later. Capture more than you think is needed.
 
 STRICT FORMAT RULES (the parser depends on these exactly):
-• Section headers must be exactly: # CONTACT, # SUMMARY, # EXPERIENCE, # SKILLS, # EDUCATION
-• Use ' — ' (space, em-dash, space) as the separator between all fields
-• Every experience bullet must start with a strong action verb
-• Preserve ALL numbers, percentages, dollar amounts, and metrics exactly as written
-• Include EVERY job, every bullet, every skill — nothing omitted
-• Output plain text only — no markdown asterisks, no bold, no tables
+- Section headers must be exactly: # CONTACT, # SUMMARY, # EXPERIENCE, # SKILLS, # EDUCATION
+- Use ' - ' (space, dash, space) as the separator between all fields
+- Every experience bullet must start with a strong action verb
+- Preserve ALL numbers, percentages, dollar amounts, and metrics exactly as written
+- Include EVERY job, every bullet, every skill - nothing omitted
+- Output plain text only - no markdown asterisks, no bold, no tables
 
-═══════════════════════════════════════════════
+===============================================
 FORMAT REFERENCE (fill with your real data):
-═══════════════════════════════════════════════
+===============================================
 
 # CONTACT
 Full Name
-email@example.com — (555) 000-0000 — City, State
+email@example.com - (555) 000-0000 - City, State
 LinkedIn: linkedin.com/in/username
 GitHub: github.com/username
 Portfolio: yoursite.com
 
 # SUMMARY
-[Write 4-6 sentences covering: total years of experience, all core domains you work across, your top 5-6 technical strengths, the types of teams/company sizes you've worked in, and one differentiator that makes you stand out. This will be cut down to 2 sentences per job application — be exhaustive here.]
+[Write 4-6 sentences covering: total years of experience, all core domains you work across, your top 5-6 technical strengths, the types of teams/company sizes you've worked in, and one differentiator that makes you stand out. This will be cut down to 3 lines per job application - be exhaustive here.]
 
 # EXPERIENCE
 [Every position, reverse chronological. Use this exact structure for each:]
 
-Company Name — City, State
-Job Title — Month Year — Month Year
-• [Action verb] + [what you did] + [scale/scope] + [tools/methods] + [quantified outcome]
-• [Include every bullet point, even minor ones — coverage matters]
-• [Add team size, budget, or user count wherever you know it]
-• [If a result isn't quantified, describe the impact in concrete terms]
+Company Name - City, State
+Job Title - Month Year - Month Year
+- [Action verb] + [what you did] + [scale/scope] + [tools/methods] + [quantified outcome]
+- [Include every bullet point, even minor ones - coverage matters]
+- [Add team size, budget, or user count wherever you know it]
+- [If a result isn't quantified, describe the impact in concrete terms]
 
 [Repeat for every position including internships, part-time, freelance, contract]
 
 # SKILLS
-[Group by category — be exhaustive, include everything you've touched professionally]
+[Group by category - be exhaustive, include everything you've touched professionally]
 Languages: Python, JavaScript, TypeScript, SQL, Java, ...
 Frameworks & Libraries: React, Node.js, FastAPI, Django, ...
 Cloud & DevOps: AWS, GCP, Docker, Kubernetes, CI/CD, ...
 Databases: PostgreSQL, MySQL, MongoDB, Redis, ...
 Tools & Platforms: Git, Jira, Figma, Linux, ...
-Certifications: AWS Solutions Architect — Amazon — 2023, ...
+Certifications: AWS Solutions Architect - Amazon - 2023, ...
 Methodologies: Agile, Scrum, TDD, REST API design, ...
 Soft Skills: Cross-functional leadership, stakeholder communication, ...
 
 # EDUCATION
 [Each degree on its own block:]
-Degree Type — Major — University Name — Graduation Year
-GPA: X.X — Dean's List — Magna Cum Laude (include if notable)
+Degree Type - Major - University Name - Graduation Year
+GPA: X.X - Dean's List - Magna Cum Laude (include if notable)
 Relevant Coursework: Course 1, Course 2, Course 3
 Honors & Awards: [any academic recognition]
 
-[Include bootcamps, online certificates, continuing education if relevant]
-
-═══════════════════════════════════════════════
+===============================================
 Now convert my resume using the format above:
 [PASTE YOUR FULL RESUME BELOW THIS LINE]
-═══════════════════════════════════════════════`;
+===============================================`;
 
 const handleDownloadTemplate = () => {
     const printTarget = document.getElementById('print-target');
     printTarget.innerHTML = `
         <div class="resume-page" style="font-family: 'Georgia', serif;">
-            <h1 class="r-name" style="margin-bottom: 4px; font-size: 18pt;">Sentinel Master Database</h1>
+            <h1 class="r-name" style="margin-bottom: 4px; font-size: 18pt;">Career Master Database</h1>
             <p style="margin: 0 0 18px 0; font-size: 10pt; color: #555; font-style: italic;">
                 Step 1 of 2 — Use this prompt in Claude, ChatGPT, or any AI to build your career database.
                 Paste the result into the Master Resume field in ResumeGen. The AI will then specialize it per job.
@@ -154,7 +154,6 @@ async function tailorWithClaude(resumeData, keywords, jobDescText, atsResult = n
     const apiKey = getApiKey();
     if (!apiKey) throw new Error('No API key set');
 
-    // Collect all bullets with back-references
     const bulletRefs = [];
     resumeData.experience.forEach((job, ji) =>
         job.bullets.forEach((b, bi) =>
@@ -165,34 +164,36 @@ async function tailorWithClaude(resumeData, keywords, jobDescText, atsResult = n
     const kwStr    = keywords.all.slice(0, 15).join(', ');
     const bullStr  = bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n');
     const jobList  = resumeData.experience.map((j, i) => `${i + 1}. ${j.role} at ${j.company}`).join('\n');
-    // Send the first 2000 chars of the job description for full context
     const jobCtx   = jobDescText.slice(0, 2000);
 
     const userMessage =
-`You are an elite resume writer. Your goal is to make this resume feel written specifically for this exact role — not just keyword-matched, but genuinely aligned in language, priorities, and framing.
+`You are an elite resume writer. Tailor this resume specifically for the role below.
 
 JOB POSTING:
 ${jobCtx}
 
 KEY SKILLS THIS ROLE REQUIRES: ${kwStr}
 
-RULES:
-- SUMMARY: Exactly 2 sentences. Open with the candidate's most relevant strength for THIS role. Mirror the job posting's vocabulary and priorities. No generic phrases like "results-driven" or "passionate about".
-- BULLETS: Start with an action verb. ≤22 words. Preserve all numbers/metrics exactly. Reframe each bullet to emphasize what THIS employer cares about. Do NOT invent facts or add new metrics.
-- BULLET COUNT: For each job, decide how relevant it is to this role. Write 3-5 bullets for highly relevant jobs, exactly 2 bullets for less relevant jobs. Never write more than 5 or fewer than 2 for any job.
-- Output ONLY the structured result below, nothing else.
-${atsResult && atsResult.missingRequired.length ? `
-IMPORTANT — KEYWORD GAP: The previous version scored ${atsResult.overall}%. These required keywords are MISSING — naturally weave as many as possible into the summary and bullets without forcing or inventing facts: ${atsResult.missingRequired.join(', ')}${atsResult.missingPreferred.length ? `\nAlso try to include these preferred keywords: ${atsResult.missingPreferred.slice(0, 8).join(', ')}` : ''}` : ''}
+GOLDEN RULES — FOLLOW EXACTLY:
+- NO PERIODS: Do not end any bullet or summary sentence with a period
+- NO "I" OR "ME": Summary must be written without first-person pronouns
+- SUMMARY: Exactly 3 lines. Line 1 = who the candidate is + most relevant strength for THIS role. Line 2 = top 3 technical strengths. Line 3 = key soft skill or value they bring.
+- BULLETS: Strong PAST-TENSE action verb first (Guided, Managed, Analyzed, etc). ≤22 words. 
+- NO CITATIONS: Do not include any [cite] tags or numbers in brackets.
+- BULLET COUNT: 3–5 bullets for highly relevant jobs, exactly 2 for less relevant.
+- Output ONLY the structured result below, nothing else
 
-JOBS IN THIS RESUME:
+${atsResult && atsResult.missingRequired.length ? `KEYWORD GAP (previous score: ${atsResult.overall}%) — Naturally weave these MISSING required keywords into the output without inventing facts: ${atsResult.missingRequired.join(', ')}` : ''}
+
+ALL JOBS (generate bullets for every one):
 ${jobList}
 
 OUTPUT FORMAT:
-SUMMARY: <rewritten summary>
+SUMMARY: <3-line summary — no periods, no I/Me>
 BULLETS:
-1. [Job Title at Company] <rewritten bullet>
-2. [Job Title at Company] <rewritten bullet>
-(group bullets by job, 3-5 for relevant jobs, 2 for less relevant — label every bullet with its job)
+1. [Job Title at Company] <bullet — no period at end, PAST TENSE verb start>
+2. [Job Title at Company] <bullet — no period at end, PAST TENSE verb start>
+(label every bullet with its job)
 
 ${resumeData.summary ? `CURRENT SUMMARY:\n${resumeData.summary}\n` : ''}BULLETS TO REWRITE:
 ${bullStr}`;
@@ -218,8 +219,7 @@ ${bullStr}`;
     }
 
     const data = await resp.json();
-    const raw  = data.content?.[0]?.text || '';
-    console.log('[Claude] raw output:', raw.slice(0, 300));
+    const raw  = cleanOutput(data.content?.[0]?.text || '');
 
     // Parse summary
     const sumMatch = raw.match(/SUMMARY:\s*(.+?)(?=\nBULLETS?|\n\n|$)/is);
@@ -228,7 +228,6 @@ ${bullStr}`;
         if (s.length > 20) resumeData.summary = s;
     }
 
-    // Parse bullets
     const bullSection = raw.match(/BULLETS?:\s*([\s\S]+)/i)?.[1] || raw;
     const lines = bullSection.split('\n')
         .map(l => l.trim())
@@ -242,6 +241,33 @@ ${bullStr}`;
             resumeData.experience[ref.ji].bullets[ref.bi] = text;
         }
     });
+}
+
+async function cleanOutput(raw) {
+    return raw
+        .replace(/\[cite_start\]/gi, '')
+        .replace(/\[cite: \d+(?:,\s*\d+)*\]/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function ensurePastTense(text) {
+    const map = {
+        'Manage': 'Managed', 'Lead': 'Led', 'Guide': 'Guided', 'Build': 'Built', 'Develop': 'Developed',
+        'Create': 'Created', 'Teach': 'Taught', 'Support': 'Supported', 'Resolve': 'Resolved',
+        'Analyze': 'Analyzed', 'Utilize': 'Utilized', 'Improve': 'Improved', 'Maintain': 'Maintained',
+        'Ensure': 'Ensured', 'Coordinate': 'Coordinated', 'Collaborate': 'Collaborated',
+        'Conduct': 'Conducted', 'Direct': 'Directed', 'Implement': 'Implemented', 'Increase': 'Increased'
+    };
+    const firstWord = text.match(/^\w+/)?.[0];
+    if (firstWord && map[firstWord]) {
+        return text.replace(new RegExp(`^${firstWord}`, 'i'), map[firstWord]);
+    }
+    if (text.match(/^\w+ing\b/i)) {
+        const verb = text.match(/^\w+(?=ing)/i)[0];
+        if (map[verb]) return text.replace(/^\w+ing/i, map[verb]);
+    }
+    return text;
 }
 
 // ── FILE PARSING ──────────────────────────────────────────────────────────────
@@ -378,7 +404,15 @@ function parseExperience(lines) {
             pendingCo = null;
         } else if (hasDash && !isBullet && !cur?.bullets?.length) {
             const dashIdx = line.search(/[—–\-]/);
-            pendingCo = { name: line.slice(0, dashIdx).trim(), loc: line.slice(dashIdx + 1).trim() };
+            const name = line.slice(0, dashIdx).trim();
+            const loc  = line.slice(dashIdx + 1).trim();
+
+            if (DATE_RANGE_RE.test(loc) && !pendingDate) {
+                pendingDate = loc;
+                pendingCo = { name, loc: '' };
+            } else {
+                pendingCo = { name, loc };
+            }
         } else if (isBullet) {
             if (cur) cur.bullets.push(line.replace(/^[•\-\*\d]+\.?\s+/, '').trim());
         } else if (cur) {
@@ -529,6 +563,16 @@ function renderResume(data) {
     }
 
     if (!data.summary) page.querySelector('[data-hide-if-empty="summary"]')?.remove();
+
+    const sections = Array.from(page.querySelectorAll('.r-section'));
+    const orderChips = Array.from(dom.sectionOrderList.querySelectorAll('.section-chip'));
+    const desiredOrder = orderChips.map(c => c.dataset.section);
+
+    const container = page.querySelector('.resume-page');
+    desiredOrder.forEach(secName => {
+        const secEl = sections.find(s => s.dataset.section === secName);
+        if (secEl) container.appendChild(secEl);
+    });
 
     const expCont = page.querySelector('[data-repeat="experience"]');
     if (expCont) {
@@ -717,7 +761,6 @@ async function handleGenerate() {
         }
         const { keywords } = session;
 
-        // Use stored tailored data on refinements; parse fresh on first run
         const resumeData = isRefinement
             ? session.resumeData
             : (log('Parsing master resume…'), parseResume(masterText));
@@ -736,6 +779,12 @@ async function handleGenerate() {
             log('Pass 2 · Targeting keyword gaps…');
             await tailorWithClaude(resumeData, keywords, jobDescText, pass1);
         }
+
+        resumeData.experience.forEach(j => {
+            j.bullets = j.bullets.map(b => ensurePastTense(b));
+        });
+
+        dom.sectionOrderPanel.style.display = 'block';
 
         log('Reordering skills by relevance…');
         resumeData.skills = reorderSkills(resumeData.skills, keywords.all);
@@ -764,6 +813,48 @@ async function handleGenerate() {
         dom.generateBtn.classList.remove('generating');
         dom.generateBtn.textContent = session?.count > 0 ? 'Refine Resume' : 'Generate with Claude';
     }
+}
+
+// ── DRAG AND DROP ────────────────────────────────────────────────────────────
+
+function initDragAndDrop() {
+    const list = dom.sectionOrderList;
+    let draggedItem = null;
+
+    list.addEventListener('dragstart', (e) => {
+        draggedItem = e.target;
+        e.target.classList.add('dragging');
+    });
+
+    list.addEventListener('dragend', (e) => {
+        draggedItem = null;
+        e.target.classList.remove('dragging');
+        if (session && session.resumeData) renderResume(session.resumeData);
+    });
+
+    list.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const afterElement = getDragAfterElement(list, e.clientY);
+        const currentDraggedItem = document.querySelector('.dragging');
+        if (afterElement == null) {
+            list.appendChild(currentDraggedItem);
+        } else {
+            list.insertBefore(currentDraggedItem, afterElement);
+        }
+    });
+}
+
+function getDragAfterElement(container, y) {
+    const draggableElements = [...container.querySelectorAll('.section-chip:not(.dragging)')];
+    return draggableElements.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+            return { offset: offset, element: child };
+        } else {
+            return closest;
+        }
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
 }
 
 // ── PRINT / RESET / FILE UPLOAD ───────────────────────────────────────────────
@@ -808,6 +899,8 @@ async function handleFileUpload(inputEl, targetTextarea) {
 }
 
 // ── EVENT LISTENERS ───────────────────────────────────────────────────────────
+
+initDragAndDrop();
 
 dom.apiKeySave.addEventListener('click', () => {
     const val = dom.apiKeyInput.value.trim();

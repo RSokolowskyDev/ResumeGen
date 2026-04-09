@@ -74,6 +74,17 @@
                 Generate Tailored Resume
             </button>
 
+            <!-- Section Order — shown after first generation -->
+            <div id="section-order-panel" style="display:none;">
+                <div class="section-order-label">Section Order <span class="section-order-hint">drag to reorder</span></div>
+                <div id="section-order-list">
+                    <div class="section-chip" draggable="true" data-section="summary">Summary</div>
+                    <div class="section-chip" draggable="true" data-section="skills">Skills</div>
+                    <div class="section-chip" draggable="true" data-section="education">Education</div>
+                    <div class="section-chip" draggable="true" data-section="experience">Experience</div>
+                </div>
+            </div>
+
             <div id="status-log">
                 <div id="gen-progress-bar">
                     <div id="gen-progress-fill"></div>
@@ -146,22 +157,22 @@
             </div>
         </header>
 
-        <section class="r-section" data-hide-if-empty="summary">
+        <section class="r-section" data-section="summary" data-hide-if-empty="summary">
             <h2 class="r-section-title">Professional Summary</h2>
             <p class="r-summary" data-slot="summary"></p>
         </section>
 
-        <section class="r-section" id="tpl-experience-section">
+        <section class="r-section" data-section="experience" id="tpl-experience-section">
             <h2 class="r-section-title">Experience</h2>
             <div data-repeat="experience"></div>
         </section>
 
-        <section class="r-section" data-hide-if-empty="skills">
+        <section class="r-section" data-section="skills" data-hide-if-empty="skills">
             <h2 class="r-section-title">Skills</h2>
             <div class="r-skills" data-slot="skills"></div>
         </section>
 
-        <section class="r-section" id="tpl-education-section">
+        <section class="r-section" data-section="education" id="tpl-education-section">
             <h2 class="r-section-title">Education</h2>
             <div data-repeat="education"></div>
         </section>
