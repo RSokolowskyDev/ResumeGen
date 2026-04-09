@@ -244,18 +244,17 @@ Now convert my resume using the format above:
 
 const handleDownloadTemplate = () => {
     const printTarget = document.getElementById('print-target');
+    // Use a non-.resume-page wrapper so print CSS doesn't apply the 11in height/overflow:hidden clamp
     printTarget.innerHTML = `
-        <div class="resume-page" style="font-family: 'Georgia', serif;">
-            <h1 class="r-name" style="margin-bottom: 4px; font-size: 18pt;">Sentinel Master Database</h1>
+        <div style="font-family: 'Georgia', serif; padding: 0.6in; width: 8.5in; box-sizing: border-box;">
+            <h1 style="margin: 0 0 4px 0; font-size: 18pt; color: #0f0a1e;">Sentinel Master Database</h1>
             <p style="margin: 0 0 18px 0; font-size: 10pt; color: #555; font-style: italic;">
                 Step 1 of 2 — Use this prompt in Claude, ChatGPT, or any AI to build your career database.
                 Paste the result into the Master Resume field in ResumeGen. The AI will then specialize it per job.
             </p>
             <hr style="border: none; border-top: 2px solid #1a1a2e; margin-bottom: 18px;">
-            <div class="r-section">
-                <h2 class="r-section-title" style="font-size: 11pt; letter-spacing: 0.1em;">PROMPT — COPY EVERYTHING BELOW INTO YOUR AI</h2>
-                <div style="white-space: pre-wrap; margin-top: 14px; font-family: 'Courier New', monospace; font-size: 9pt; line-height: 1.6; background: #f8f8f8; padding: 14px; border-left: 3px solid #1a1a2e;">${TRANSFORMATION_PROMPT}</div>
-            </div>
+            <h2 style="font-size: 11pt; letter-spacing: 0.1em; text-transform: uppercase; color: #7c3aed; margin: 0 0 14px 0;">PROMPT — COPY EVERYTHING BELOW INTO YOUR AI</h2>
+            <div style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 8.5pt; line-height: 1.6; background: #f8f8f8; padding: 14px; border-left: 3px solid #1a1a2e;">${TRANSFORMATION_PROMPT}</div>
         </div>`;
     window.print();
     printTarget.innerHTML = '';
