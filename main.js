@@ -1,403 +1,1199 @@
-// ── GROQ CONFIG ───────────────────────────────────────────────────────────────
-const GROQ_MODEL   = 'llama-3.3-70b-versatile';
-const STORAGE_KEY  = 'resumegen_groq_api_key';
+// ══════════════════════════════════════════════════════════════════
+//  ResumeGen · main.js
+//  Supports Groq (primary) and Gemini (fallback) APIs.
+//
+//  ARCHITECTURE NOTES:
+//  1. parseResume()  → structured JS object from raw text
+//  2. sanitize()     → strips [cite_start], [cite:N], markdown junk
+//  3. callAI()       → sends to Groq or Gemini, returns raw string
+//  4. parseAIJson()  → robust JSON extraction with fallback repair
+//  5. validateData() → ensures required fields survive AI mutations
+//  6. renderResume() → fills HTML template from validated data
+// ══════════════════════════════════════════════════════════════════
 
-// ── DOM REFS ──────────────────────────────────────────────────────────────────
+const GROQ_MODEL_LARGE = 'llama-3.3-70b-versatile';
+const GROQ_MODEL_SMALL = 'llama-3.1-8b-instant';
+const STORAGE_KEY_GROQ = 'resumegen_groq_api_key';
+const STORAGE_KEY_GEM  = 'resumegen_gemini_api_key';
+const STORAGE_KEY_MODEL= 'resumegen_model_pref';
+
+// ── DOM REFS ──────────────────────────────────────────────────────
 const dom = {
-    modelDot:               document.getElementById('model-dot'),
-    modelStatusText:        document.getElementById('model-status-text'),
-    apiKeyInput:            document.getElementById('api-key-input'),
-    apiKeySave:             document.getElementById('api-key-save'),
-    apiKeyPanel:            document.getElementById('api-key-panel'),
-    masterInput:            document.getElementById('master-resume-input'),
-    jobDescInput:           document.getElementById('job-desc-input'),
-    generateBtn:            document.getElementById('generate-btn'),
-    resetBtn:               document.getElementById('reset-btn'),
-    pdfBtn:                 document.getElementById('pdf-btn'),
-    statusMessages:         document.getElementById('status-messages'),
-    genProgressBar:         document.getElementById('gen-progress-bar'),
-    genProgressFill:        document.getElementById('gen-progress-fill'),
-    atsPanel:               document.getElementById('ats-panel'),
-    atsScoreNum:            document.getElementById('ats-score-num'),
-    atsBarFill:             document.getElementById('ats-bar-fill'),
-    atsBarLabel:            document.getElementById('ats-bar-label'),
-    atsCounts:              document.getElementById('ats-counts'),
-    atsMissingRequired:     document.getElementById('ats-missing-required'),
-    atsMissingRequiredList: document.getElementById('ats-missing-required-list'),
-    atsMissingPreferred:    document.getElementById('ats-missing-preferred'),
-    atsMissingPreferredList:document.getElementById('ats-missing-preferred-list'),
-    atsSections:            document.getElementById('ats-sections'),
-    resumeOutput:           document.getElementById('resume-output'),
-    fileJob:                document.getElementById('file-job'),
-    printTarget:            document.getElementById('print-target'),
-    resumeTpl:              document.getElementById('resume-tpl'),
-    sectionOrderPanel:      document.getElementById('section-order-panel'),
-    sectionOrderList:       document.getElementById('section-order-list'),
+    modelDot:                document.getElementById('model-dot'),
+    modelStatusText:         document.getElementById('model-status-text'),
+    apiKeyInput:             document.getElementById('api-key-input'),
+    apiKeySave:              document.getElementById('api-key-save'),
+    geminiKeyInput:          document.getElementById('gemini-key-input'),
+    geminiKeySave:           document.getElementById('gemini-key-save'),
+    modelSelect:             document.getElementById('model-select'),
+    apiKeyPanel:             document.getElementById('api-key-panel'),
+    masterInput:             document.getElementById('master-resume-input'),
+    jobDescInput:            document.getElementById('job-desc-input'),
+    generateBtn:             document.getElementById('generate-btn'),
+    resetBtn:                document.getElementById('reset-btn'),
+    pdfBtn:                  document.getElementById('pdf-btn'),
+    statusMessages:          document.getElementById('status-messages'),
+    genProgressBar:          document.getElementById('gen-progress-bar'),
+    genProgressFill:         document.getElementById('gen-progress-fill'),
+    atsPanel:                document.getElementById('ats-panel'),
+    atsScoreNum:             document.getElementById('ats-score-num'),
+    atsBarFill:              document.getElementById('ats-bar-fill'),
+    atsBarLabel:             document.getElementById('ats-bar-label'),
+    atsCounts:               document.getElementById('ats-counts'),
+    atsMissingRequired:      document.getElementById('ats-missing-required'),
+    atsMissingRequiredList:  document.getElementById('ats-missing-required-list'),
+    atsMissingPreferred:     document.getElementById('ats-missing-preferred'),
+    atsMissingPreferredList: document.getElementById('ats-missing-preferred-list'),
+    atsSections:             document.getElementById('ats-sections'),
+    resumeOutput:            document.getElementById('resume-output'),
+    fileJob:                 document.getElementById('file-job'),
+    fileMaster:              document.getElementById('file-master'),
+    buildStatus:             document.getElementById('build-status'),
+    printTarget:             document.getElementById('print-target'),
+    resumeTpl:               document.getElementById('resume-tpl'),
+    sectionOrderPanel:       document.getElementById('section-order-panel'),
+    sectionOrderList:        document.getElementById('section-order-list'),
 };
 
 let isGenerating = false;
-let session = null; // { keywords, jobDescText, atsResult, count }
+let session = null;
 
-// ── API KEY MANAGEMENT ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 1 — API KEY MANAGEMENT
+// ══════════════════════════════════════════════════════════════════
 
-function getApiKey() { return localStorage.getItem(STORAGE_KEY) || ''; }
+const getGroqKey  = () => localStorage.getItem(STORAGE_KEY_GROQ) || '';
+const getGemKey   = () => localStorage.getItem(STORAGE_KEY_GEM)  || '';
+const getModelPref= () => localStorage.getItem(STORAGE_KEY_MODEL) || dom.modelSelect.value || 'auto';
 
-function setApiKey(key) {
-    localStorage.setItem(STORAGE_KEY, key.trim());
-    updateApiKeyStatus();
-}
+function setGroqKey(k)  { localStorage.setItem(STORAGE_KEY_GROQ,  k.trim()); updateApiKeyStatus(); }
+function setGemKey(k)   { localStorage.setItem(STORAGE_KEY_GEM,   k.trim()); updateApiKeyStatus(); }
+function setModelPref(v){ localStorage.setItem(STORAGE_KEY_MODEL, v); }
 
 function updateApiKeyStatus() {
-    const key = getApiKey();
-    if (key) {
-        dom.modelDot.className = 'status-dot ready';
-        dom.modelStatusText.textContent = 'Groq · Llama 3.3 70B · Ready';
-        dom.generateBtn.disabled = false;
-        dom.apiKeyPanel.classList.add('key-saved');
-        dom.apiKeyInput.value = '';
-        dom.apiKeyInput.placeholder = 'API key saved ✓';
-    } else {
-        dom.modelDot.className = 'status-dot error';
-        dom.modelStatusText.textContent = 'Enter API key to activate';
-        dom.generateBtn.disabled = true;
-        dom.apiKeyPanel.classList.remove('key-saved');
-    }
+    const groq = getGroqKey();
+    const gem  = getGemKey();
+    const hasKey = !!(groq || gem);
+    dom.modelDot.className = hasKey ? 'status-dot ready' : 'status-dot loading';
+    dom.modelStatusText.textContent = hasKey
+        ? `Ready · ${[groq && 'Groq', gem && 'Gemini'].filter(Boolean).join(' + ')}`
+        : 'Enter at least one API key to activate';
+    dom.generateBtn.disabled = !hasKey;
+    dom.apiKeyPanel.classList.toggle('key-saved', hasKey);
 }
 
-// ── GROQ API CALL ─────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 2 — SANITIZATION  ← FIX FOR FAILURE 1 & 3
+//  Strips all citation artifacts and markdown formatting that
+//  pollute the resume text before it ever reaches the AI or DOM.
+// ══════════════════════════════════════════════════════════════════
 
-async function tailorWithGroq(resumeData, keywords, jobDescText, atsResult = null) {
-    const kwStr  = keywords.all.slice(0, 15).join(', ');
-    const jobCtx = jobDescText.slice(0, 2000);
-    const jobList = resumeData.experience.map((j, i) => `${i + 1}. ${j.role}${j.company ? ' at ' + j.company : ''}`).join('\n');
-
-    // Build bullet list — include placeholder lines for jobs with no bullets
-    // so the LLM knows to generate content for every job
-    let bullNum = 0;
-    const bullLines = [];
-    resumeData.experience.forEach(job => {
-        const ctx = `${job.role}${job.company ? ' at ' + job.company : ''}`;
-        if (job.bullets.length > 0) {
-            job.bullets.forEach(b => { bullNum++; bullLines.push(`${bullNum}. [${ctx}] ${b}`); });
-        } else {
-            bullLines.push(`-- [${ctx}] (no existing bullets — generate 2–3 strong power statement bullets)`);
-        }
-    });
-    const bullStr = bullLines.join('\n');
-
-    const userMessage =
-`You are an elite resume writer. Tailor this resume specifically for the role below.
-
-JOB POSTING:
-${jobCtx}
-
-KEY SKILLS THIS ROLE REQUIRES: ${kwStr}
-
-GOLDEN RULES — FOLLOW EXACTLY:
-- NO PERIODS: Do not end any bullet or summary sentence with a period
-- NO "I" OR "ME": Summary must be written without first-person pronouns ("Software Engineering student with..." not "I am...")
-- SUMMARY: Exactly 3 lines. Line 1 = who the candidate is + most relevant strength for THIS role. Line 2 = top 3 technical strengths (mirror job posting vocabulary). Line 3 = key soft skill or value they bring. No clichés like "results-driven" or "passionate about"
-- BULLETS: Strong action verb first (Spearheaded, Managed, Analyzed, etc). ≤22 words. Follow: [Action Verb] + [Quantifiable Task] + [Specific Result/Impact]. Preserve all numbers/metrics exactly. Do NOT invent facts
-- BULLET COUNT: 3–5 bullets for highly relevant jobs, exactly 2 for less relevant. EVERY job must have bullets — generate new ones for any job marked "(no existing bullets)"
-- Output ONLY the structured result below, nothing else
-${atsResult && atsResult.missingRequired.length ? `
-KEYWORD GAP (previous score: ${atsResult.overall}%) — Naturally weave these MISSING required keywords into the output without inventing facts: ${atsResult.missingRequired.join(', ')}${atsResult.missingPreferred.length ? `\nAlso try to include: ${atsResult.missingPreferred.slice(0, 8).join(', ')}` : ''}` : ''}
-
-ALL JOBS (generate bullets for every one):
-${jobList}
-
-OUTPUT FORMAT:
-SUMMARY: <3-line summary — no periods, no I/Me>
-BULLETS:
-1. [Job Title at Company] <bullet — no period at end>
-2. [Job Title at Company] <bullet — no period at end>
-(label every bullet with its job; generate fresh bullets for any job marked "no existing bullets")
-
-${resumeData.summary ? `CURRENT SUMMARY:\n${resumeData.summary}\n` : ''}BULLETS TO REWRITE:
-${bullStr}`;
-
-    const apiKey = getApiKey();
-    if (!apiKey) throw new Error('No Groq API key set');
-
-    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type':  'application/json',
-        },
-        body: JSON.stringify({
-            model:       GROQ_MODEL,
-            max_tokens:  2048,
-            temperature: 0.2,
-            messages:    [{ role: 'user', content: userMessage }],
-        }),
-    });
-
-    if (!resp.ok) {
-        const body = await resp.text();
-        throw new Error(`Groq API ${resp.status}: ${body}`);
-    }
-
-    const data = await resp.json();
-    const raw = cleanOutput(data.choices?.[0]?.message?.content || '');
-    console.log('[Groq] raw output:', raw.slice(0, 300));
-
-    // Parse summary — strip trailing periods and first-person starts
-    const sumMatch = raw.match(/SUMMARY:\s*(.+?)(?=\nBULLETS?|\n\n|$)/is);
-    if (sumMatch) {
-        let s = sumMatch[1].trim()
-            .replace(/\.\s*$/, '')                          // strip trailing period
-            .replace(/^I\s+(am|have|bring|offer)\b/i, ''); // strip leading "I am/have..."
-        if (s.length > 20) resumeData.summary = s;
-    }
-
-    // Parse bullets — save backups first so a bad parse can't lose content
-    const bulletBackups = new Map(resumeData.experience.map(j => [j, [...j.bullets]]));
-    resumeData.experience.forEach(j => j.bullets = []);
-
-    const bullSection = raw.match(/BULLETS?:\s*([\s\S]+)/i)?.[1] || raw;
-    const lines = bullSection.split('\n')
-        .map(l => l.trim())
-        .filter(l => /^\d+[.)]\s+\S/.test(l));
-
-    lines.forEach(line => {
-        const tagMatch = line.match(/^\d+[.)]\s+\[(.+?)\]\s+(.*)/);
-        if (!tagMatch) return;
-        const [, ctx, text] = tagMatch;
-        const job = resumeData.experience.find(j =>
-            ctx.toLowerCase().includes(j.role.toLowerCase()) ||
-            ctx.toLowerCase().includes((j.company || '').toLowerCase())
-        );
-        if (job && text.trim().length > 10) {
-            // Strip trailing period from each bullet
-            job.bullets.push(text.trim().replace(/\.\s*$/, ''));
-        }
-    });
-
-    // Safety net: if any job ended up with 0 bullets, restore from backup
-    resumeData.experience.forEach(j => {
-        if (j.bullets.length === 0) {
-            const backup = bulletBackups.get(j);
-            if (backup && backup.length > 0) j.bullets = backup;
-        }
-    });
-}
-
-const TRANSFORMATION_PROMPT = `You are a Career Data Architect. Convert the resume below into a Career Master Database — a single comprehensive record of everything in my career. This database will be used by an AI to generate highly targeted resumes for specific job descriptions later. Capture more than you think is needed.
-
-STRICT FORMAT RULES (the parser depends on these exactly):
-- Section headers must be exactly: # CONTACT, # SUMMARY, # EXPERIENCE, # SKILLS, # EDUCATION
-- Use ' - ' (space, dash, space) as the separator between all fields
-- Every experience bullet must start with a strong action verb
-- Preserve ALL numbers, percentages, dollar amounts, and metrics exactly as written
-- Include EVERY job, every bullet, every skill - nothing omitted
-- Output plain text only - no markdown asterisks, no bold, no tables
-
-===============================================
-FORMAT REFERENCE (fill with your real data):
-===============================================
-
-# CONTACT
-Full Name
-email@example.com - (555) 000-0000 - City, State
-LinkedIn: linkedin.com/in/username
-GitHub: github.com/username
-Portfolio: yoursite.com
-
-# SUMMARY
-[Write 4-6 sentences covering: total years of experience, all core domains you work across, your top 5-6 technical strengths, the types of teams/company sizes you've worked in, and one differentiator that makes you stand out. This will be cut down to 3 lines per job application - be exhaustive here.]
-
-# EXPERIENCE
-[Every position, reverse chronological. Use this exact structure for each:]
-
-Company Name - City, State
-Job Title - Month Year - Month Year
-- [Action verb] + [what you did] + [scale/scope] + [tools/methods] + [quantified outcome]
-- [Include every bullet point, even minor ones - coverage matters]
-- [Add team size, budget, or user count wherever you know it]
-- [If a result isn't quantified, describe the impact in concrete terms]
-
-[Repeat for every position including internships, part-time, freelance, contract]
-
-# SKILLS
-[Group by category - be exhaustive, include everything you've touched professionally]
-Languages: Python, JavaScript, TypeScript, SQL, Java, ...
-Frameworks & Libraries: React, Node.js, FastAPI, Django, ...
-Cloud & DevOps: AWS, GCP, Docker, Kubernetes, CI/CD, ...
-Databases: PostgreSQL, MySQL, MongoDB, Redis, ...
-Tools & Platforms: Git, Jira, Figma, Linux, ...
-Certifications: AWS Solutions Architect - Amazon - 2023, ...
-Methodologies: Agile, Scrum, TDD, REST API design, ...
-Soft Skills: Cross-functional leadership, stakeholder communication, ...
-
-# EDUCATION
-[Each degree on its own block:]
-Degree Type - Major - University Name - Graduation Year
-GPA: X.X - Dean's List - Magna Cum Laude (include if notable)
-Relevant Coursework: Course 1, Course 2, Course 3
-Honors & Awards: [any academic recognition]
-
-[Include bootcamps, online certificates, continuing education if relevant]
-
-===============================================
-Now convert my resume using the format above:
-[PASTE YOUR FULL RESUME BELOW THIS LINE]
-===============================================`;
-
-const handleDownloadTemplate = () => {
-    // Use a Blob URL so the fresh window has no conflicting print CSS
-    const escaped = TRANSFORMATION_PROMPT.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Career Master Database</title>
-<style>
-  body { font-family: Georgia, serif; margin: 0; padding: 0; }
-  .page { padding: 0.6in; box-sizing: border-box; }
-  h1 { font-size: 18pt; color: #0f0a1e; margin: 0 0 4px 0; }
-  .subtitle { font-size: 10pt; color: #555; font-style: italic; margin: 0 0 18px 0; }
-  hr { border: none; border-top: 2px solid #1a1a2e; margin-bottom: 18px; }
-  h2 { font-size: 11pt; letter-spacing: 0.1em; color: #7c3aed; text-transform: uppercase; margin: 0 0 14px 0; }
-  pre { font-family: 'Courier New', monospace; font-size: 8.5pt; line-height: 1.6;
-        background: #f8f8f8; padding: 14px; border-left: 3px solid #1a1a2e;
-        white-space: pre-wrap; word-wrap: break-word; margin: 0; }
-  @page { size: letter portrait; margin: 0.5in; }
-</style>
-</head><body>
-<div class="page">
-  <h1>Career Master Database</h1>
-  <p class="subtitle">Step 1 of 2 — Use this prompt in Claude, ChatGPT, or any AI to build your career database. Paste the result into the Master Resume field in ResumeGen. The AI will then specialize it per job.</p>
-  <hr>
-  <h2>PROMPT — COPY EVERYTHING BELOW INTO YOUR AI</h2>
-  <pre>${escaped}</pre>
-</div>
-<script>window.onload = () => { window.print(); };<\/script>
-</body></html>`;
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
-    window.open(url, '_blank');
-    // Revoke after a delay to allow the new tab to load
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-};
-
-// ── AI GENERATION ─────────────────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = 'You are a resume writer. Output ONLY the rewritten text, nothing else. No explanations, no quotes, no labels.';
-
-async function generate(userPrompt, maxTokens = 1200) {
-    if (!engine) return null;
-    try {
-        console.log('[WebLLM] Generating…', userPrompt.slice(0, 80));
-        const reply = await engine.chat.completions.create({
-            messages: [
-                { role: 'system',  content: SYSTEM_PROMPT },
-                { role: 'user',    content: userPrompt },
-            ],
-            max_tokens:         maxTokens,
-            temperature:        0.2,
-            repetition_penalty: 1.1,
-        });
-        const out = cleanOutput(reply.choices[0]?.message?.content || '');
-        console.log('[WebLLM] Output:', out.slice(0, 120));
-        return out;
-    } catch (err) {
-        console.warn('Generate error (keeping original):', err.message);
-        return null;
-    }
-}
-
-function cleanOutput(raw) {
-    return raw
+function sanitize(text) {
+    if (!text || typeof text !== 'string') return '';
+    return text
+        // Remove [cite_start] artifacts
         .replace(/\[cite_start\]/gi, '')
-        .replace(/\[cite: \d+(?:,\s*\d+)*\]/gi, '')
-        .replace(/\s+/g, ' ')
+        // Remove [cite: 1, 2, 3] artifacts (any number format)
+        .replace(/\[cite:\s*[\d,\s]+\]/gi, '')
+        // Remove [cite_end] if present
+        .replace(/\[cite_end\]/gi, '')
+        // Remove markdown bold/italic
+        .replace(/\*\*(.+?)\*\*/g, '$1')
+        .replace(/\*(.+?)\*/g, '$1')
+        // Remove markdown heading markers
+        .replace(/^#{1,6}\s*/gm, '')
+        // Collapse multiple spaces/newlines
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
         .trim();
 }
 
-function ensurePastTense(text) {
-    const map = {
-        'Manage': 'Managed', 'Lead': 'Led', 'Guide': 'Guided', 'Build': 'Built', 'Develop': 'Developed',
-        'Create': 'Created', 'Teach': 'Taught', 'Support': 'Supported', 'Resolve': 'Resolved',
-        'Analyze': 'Analyzed', 'Utilize': 'Utilized', 'Improve': 'Improved', 'Maintain': 'Maintained',
-        'Ensure': 'Ensured', 'Coordinate': 'Coordinated', 'Collaborate': 'Collaborated',
-        'Conduct': 'Conducted', 'Direct': 'Directed', 'Implement': 'Implemented', 'Increase': 'Increased'
-    };
-    // Replace first word if it matches (case insensitive)
-    const firstWord = text.match(/^\w+/)?.[0];
-    if (firstWord && map[firstWord]) {
-        return text.replace(new RegExp(`^${firstWord}`, 'i'), map[firstWord]);
+// Sanitize every string value recursively in an object
+function sanitizeData(obj) {
+    if (typeof obj === 'string') return sanitize(obj);
+    if (Array.isArray(obj)) return obj.map(sanitizeData);
+    if (obj && typeof obj === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(obj)) out[k] = sanitizeData(v);
+        return out;
     }
-    // Also catch some common "ing" starts
-    if (text.match(/^\w+ing\b/i)) {
-        const verb = text.match(/^\w+(?=ing)/i)[0];
-        if (map[verb]) return text.replace(/^\w+ing/i, map[verb]);
+    return obj;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 3 — AI ENGINE
+// ══════════════════════════════════════════════════════════════════
+
+async function callAI(prompt, preferSmall = false) {
+    const pref    = getModelPref();
+    const groqKey = getGroqKey();
+    const gemKey  = getGemKey();
+
+    const resolveTarget = () => {
+        if (pref === 'auto') {
+            return groqKey
+                ? { api: 'groq',   id: preferSmall ? GROQ_MODEL_SMALL : GROQ_MODEL_LARGE }
+                : { api: 'gemini', id: 'gemini-2.5-flash' };
+        }
+        if (pref.startsWith('gemini')) return { api: 'gemini', id: pref };
+        return { api: 'groq', id: pref };
+    };
+
+    const callGroq = async (modelId) => {
+        if (!groqKey) throw new Error('No Groq API key saved.');
+        const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: modelId,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.15,
+                max_tokens: 4096,
+            }),
+        });
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            throw new Error(`Groq ${r.status}: ${e.error?.message || r.statusText}`);
+        }
+        const d = await r.json();
+        return d.choices?.[0]?.message?.content || '';
+    };
+
+    const callGemini = async (modelId) => {
+        if (!gemKey) throw new Error('No Gemini API key saved.');
+        const r = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${gemKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { temperature: 0.15, maxOutputTokens: 8192 },
+                }),
+            }
+        );
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            throw new Error(`Gemini ${r.status}: ${e.error?.message || r.statusText}`);
+        }
+        const d = await r.json();
+        const text = d.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error('Empty response from Gemini.');
+        return text;
+    };
+
+    const target = resolveTarget();
+    try {
+        return target.api === 'groq' ? await callGroq(target.id) : await callGemini(target.id);
+    } catch (err) {
+        // Auto-fallback: if Groq hit rate limit, try Gemini
+        if (pref === 'auto' && target.api === 'groq' && gemKey &&
+            (err.message.includes('429') || err.message.toLowerCase().includes('limit'))) {
+            log('Groq rate limited — falling back to Gemini…');
+            return await callGemini('gemini-2.5-flash');
+        }
+        throw err;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 4 — ROBUST JSON EXTRACTION  ← FIX FOR FAILURE 2
+//  The old extractJSON() just grabbed first { to last }.
+//  This version tries multiple strategies before giving up.
+// ══════════════════════════════════════════════════════════════════
+
+function parseAIJson(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+
+    console.log('[parseAIJson] Raw AI response (first 500 chars):', raw.slice(0, 500));
+
+    // Strategy 1: Strip ALL markdown code fences (Gemini loves these)
+    let text = raw
+        .replace(/^[\s\S]*?```(?:json)?[\s]*/i, '')  // strip everything before and including ```json
+        .replace(/```[\s\S]*$/i, '')                   // strip ``` and everything after
+        .trim();
+
+    // If stripping fences left nothing useful, fall back to raw
+    if (!text.includes('{')) text = raw.trim();
+
+    // Strategy 2: Direct parse
+    try { return JSON.parse(text); } catch (_) {}
+
+    // Strategy 3: Find outermost { … } with proper brace counting
+    const start = text.indexOf('{');
+    if (start !== -1) {
+        let depth = 0, inStr = false, escape = false, end = -1;
+        for (let i = start; i < text.length; i++) {
+            const ch = text[i];
+            if (escape)             { escape = false; continue; }
+            if (ch === '\\' && inStr) { escape = true; continue; }
+            if (ch === '"')         { inStr = !inStr; continue; }
+            if (inStr)              continue;
+            if (ch === '{')         depth++;
+            else if (ch === '}')    { depth--; if (depth === 0) { end = i; break; } }
+        }
+        if (end !== -1) {
+            const slice = text.slice(start, end + 1);
+
+            // Strategy 4: Direct parse of slice
+            try { return JSON.parse(slice); } catch (_) {}
+
+            // Strategy 5: Clean control characters
+            try {
+                const cleaned = slice.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
+                return JSON.parse(cleaned);
+            } catch (_) {}
+
+            // Strategy 6: Fix unescaped newlines inside JSON strings (common Gemini bug)
+            try {
+                const fixed = slice.replace(/("(?:[^"\\]|\\.)*")|[\n\r\t]/g,
+                    (m, str) => str ? str : ' ');
+                return JSON.parse(fixed);
+            } catch (_) {}
+
+            // Strategy 7: Aggressive cleanup — remove all literal newlines inside strings
+            try {
+                const aggressive = slice
+                    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+                    .replace(/,\s*}/g, '}')    // trailing commas
+                    .replace(/,\s*]/g, ']');   // trailing commas in arrays
+                return JSON.parse(aggressive);
+            } catch (_) {}
+        }
+    }
+
+    console.error('[parseAIJson] All strategies failed. Full response:', raw);
+    return null;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 5 — DATA VALIDATION  ← FIX FOR FAILURE 2 (continued)
+//  After merging AI output, ensure nothing critical is missing.
+// ══════════════════════════════════════════════════════════════════
+
+function validateAndMerge(masterData, aiOutput) {
+    if (!aiOutput || typeof aiOutput !== 'object') return masterData;
+
+    const merged = { ...masterData };
+
+    // Summary — must be a non-empty string
+    if (typeof aiOutput.summary === 'string' && aiOutput.summary.trim()) {
+        merged.summary = sanitize(aiOutput.summary);
+    }
+
+    // Experience — must be an array of objects with role+company
+    if (Array.isArray(aiOutput.experience) && aiOutput.experience.length > 0) {
+        const valid = aiOutput.experience.filter(j =>
+            j && typeof j === 'object' && (j.role || j.company)
+        );
+        if (valid.length > 0) {
+            merged.experience = valid.map(j => ({
+                role:     sanitize(j.role     || ''),
+                company:  sanitize(j.company  || ''),
+                location: sanitize(j.location || ''),
+                dates:    sanitize(j.dates    || ''),
+                bullets:  Array.isArray(j.bullets)
+                    ? j.bullets.map(b => sanitize(String(b))).filter(Boolean)
+                    : [],
+            }));
+        }
+    }
+
+    // Skills — must be array of strings
+    if (Array.isArray(aiOutput.skills) && aiOutput.skills.length > 0) {
+        merged.skills = [...new Set(
+            aiOutput.skills.map(s => sanitize(String(s))).filter(s => s.length > 0 && s.length < 60)
+        )];
+    }
+
+    // Education — accept if valid
+    if (Array.isArray(aiOutput.education) && aiOutput.education.length > 0) {
+        const valid = aiOutput.education.filter(e => e && (e.school || e.degree));
+        if (valid.length > 0) {
+            merged.education = valid.map(e => ({
+                degree:  sanitize(e.degree  || ''),
+                major:   sanitize(e.major   || ''),
+                school:  sanitize(e.school  || ''),
+                dates:   sanitize(e.dates   || ''),
+                details: Array.isArray(e.details)
+                    ? e.details.map(d => sanitize(String(d))).filter(Boolean)
+                    : [],
+            }));
+        }
+    }
+
+    // Certifications
+    if (Array.isArray(aiOutput.certifications)) {
+        merged.certifications = aiOutput.certifications
+            .filter(c => c && c.name)
+            .map(c => ({
+                name:   sanitize(c.name   || ''),
+                issuer: sanitize(c.issuer || ''),
+                year:   sanitize(c.year   || ''),
+            }));
+    }
+
+    // ALWAYS restore original contact — AI must never overwrite it
+    merged.contact = masterData.contact;
+
+    return merged;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 6 — AI TAILORING
+// ══════════════════════════════════════════════════════════════════
+
+async function tailorResume(masterData, keywords, jobDesc, atsResult = null) {
+    const isPass2  = !!atsResult;
+    const missing  = isPass2
+        ? [...atsResult.missingRequired, ...atsResult.missingPreferred.slice(0, 5)].join(', ')
+        : keywords.required.slice(0, 15).join(', ');
+
+    const prompt = `You are an expert executive resume writer. Tailor the candidate's Master Database for the Job Description below.
+
+MASTER DATABASE (source of truth — use ALL jobs, education, and certifications):
+${JSON.stringify({experience: masterData.experience, skills: masterData.skills, education: masterData.education, certifications: masterData.certifications})}
+
+JOB DESCRIPTION:
+${jobDesc}
+
+${isPass2 ? `IMPROVEMENT NOTE: The previous draft was missing these keywords — naturally weave them in: ${missing}` : `PRIORITY KEYWORDS TO INCLUDE: ${missing}`}
+
+STRICT RULES:
+1. You may omit roles with zero relevance to the job description, but never merge roles. Always keep at least 3-4 entries. Never omit the most recent role.
+2. Do NOT invent experience, tools, or metrics not present in the Master Database.
+3. Use past-tense action verbs only (Managed, Led, Built — NOT Manage, Lead, Build).
+4. No markdown formatting anywhere — no **bold**, no *italic*, no bullet symbols. Plain text strings only.
+5. No first-person pronouns.
+6. CRITICAL: Each experience entry must keep its exact original company name and role title from the Master Database. Do NOT swap, rename, or reassign companies or roles between entries.
+7. Return ONLY the raw JSON object. No code fences, no \`\`\`json, no explanation before or after. Start your response with { and end with }.
+
+JSON SCHEMA (return exactly this structure):
+{
+  "summary": "3 sentence professional summary",
+  "experience": [
+    { "role": "Job Title", "company": "Company Name", "location": "City, ST", "dates": "Month YYYY - Month YYYY", "bullets": ["bullet 1", "bullet 2"] }
+  ],
+  "skills": ["Skill A", "Skill B"],
+  "education": [
+    { "degree": "Bachelor of Science", "major": "Software Engineering", "school": "Ensign College", "dates": "2028", "details": ["GPA: 3.9", "Relevant coursework..."] }
+  ],
+  "certifications": [
+    { "name": "Cert Name", "issuer": "Issuing Body", "year": "2024" }
+  ]
+}`;
+
+    const raw    = await callAI(prompt);
+    const parsed = parseAIJson(raw);
+
+    if (!parsed) {
+        throw new Error('AI returned invalid JSON. Try again or switch models.');
+    }
+
+    return validateAndMerge(masterData, parsed);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 7 — AUTO-STRUCTURE MASTER DATABASE
+// ══════════════════════════════════════════════════════════════════
+
+const STRUCTURE_PROMPT = `You are a Career Data Architect. Convert the raw resume text below into a structured Master Database that an AI will use to tailor applications per job.
+
+STRICT FORMAT — output plain text only, no markdown, no bold, no asterisks:
+
+# CONTACT
+Full Name
+email@example.com - (555) 000-0000 - City, ST
+LinkedIn: linkedin.com/in/handle
+GitHub: github.com/handle
+Portfolio: yoursite.com
+
+# SUMMARY
+Comprehensive 4-6 sentence summary.
+
+# EXPERIENCE
+Company Name
+City, ST
+Month YYYY - Month YYYY
+Job Title Month YYYY - Month YYYY
+- Action verb + quantified result
+- Action verb + quantified result
+
+# SKILLS
+Languages: Skill 1, Skill 2
+Frameworks: Skill 3, Skill 4
+
+# EDUCATION
+Degree - Major - School - Year
+GPA: X.X - Coursework: Course 1, Course 2
+
+# CERTIFICATIONS
+Certification Name - Issuing Body - Year
+
+RAW RESUME TO CONVERT:
+`;
+
+async function handleBuildMasterDatabase() {
+    const rawText = dom.masterInput.value.trim();
+    if (!rawText) return;
+    // Skip if already structured
+    if (rawText.includes('# CONTACT') && rawText.includes('# EXPERIENCE')) return;
+
+    const key = getGroqKey() || getGemKey();
+    if (!key) return;
+
+    dom.buildStatus.style.display = 'inline-block';
+    try {
+        const raw = await callAI(STRUCTURE_PROMPT + rawText, true);
+        const result = sanitize(raw);
+        if (result.includes('# CONTACT') && result.includes('# EXPERIENCE')) {
+            dom.masterInput.value = result;
+        }
+    } catch (err) {
+        console.error('Auto-structuring failed:', err);
+    } finally {
+        dom.buildStatus.style.display = 'none';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 8 — RESUME PARSER
+//  Converts raw structured text → JS object
+// ══════════════════════════════════════════════════════════════════
+
+const DATE_RE = /(\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}|\d{4})\s*[-–—to]+\s*(\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}|\d{4}|Present|Current|Now)/i;
+
+function parseResume(rawText) {
+    // Sanitize the raw text first — removes [cite_start] etc. before parsing
+    const text = sanitize(rawText);
+
+    const sections = {
+        contact: [], summary: [], experience: [],
+        skills: [], education: [], certifications: [],
+    };
+    let cur = null;
+
+    const HEADERS = [
+        { key: 'contact',        re: /^#?\s*CONTACT/i },
+        { key: 'summary',        re: /^#?\s*SUMMARY/i },
+        { key: 'experience',     re: /^#?\s*EXPERIENCE/i },
+        { key: 'skills',         re: /^#?\s*SKILLS/i },
+        { key: 'education',      re: /^#?\s*EDUCATION/i },
+        { key: 'certifications', re: /^#?\s*CERTIFICATIONS?/i },
+    ];
+
+    for (const line of text.split('\n')) {
+        const l = line.trim();
+        if (!l) continue;
+        let isHeader = false;
+        for (const h of HEADERS) {
+            if (h.re.test(l)) { cur = h.key; isHeader = true; break; }
+        }
+        if (!isHeader && cur) sections[cur].push(l);
+    }
+
+    return {
+        contact:        parseContact(sections.contact),
+        summary:        sections.summary.join(' ').trim(),
+        experience:     parseExperience(sections.experience),
+        skills:         parseSkills(sections.skills),
+        education:      parseEducation(sections.education),
+        certifications: parseCertifications(sections.certifications),
+    };
+}
+
+function parseContact(lines) {
+    const text = lines.join(' ');
+    const rawName = lines.find(l => l.trim())?.trim() || '';
+    const name = rawName
+        .replace(/\s*[-–—]\s*(MASTER\s+RESUME(\s+DATABASE)?|RESUME\s+DATABASE|DATABASE)\s*$/i, '')
+        .replace(/\s*[-–—]\s*COMPREHENSIVE.*$/i, '')
+        .trim();
+
+    // Extract GitHub
+    const ghMatch = text.match(/(?:github\.com\/)([\w\-]+)/i);
+    // Extract Portfolio (any URL that isn't linkedin or github)
+    const portMatch = text.match(/(?:portfolio|site|web):\s*([\w.\-\/]+)/i) ||
+                      text.match(/([\w\-]+\.(?:io|dev|com|me)(?:\/[\w\-]+)*)/i);
+
+    return {
+        name,
+        email:     text.match(/[\w.+\-]+@[\w.\-]+\.[a-z]{2,}/i)?.[0] || '',
+        phone:     text.match(/(\+?1?\s?[\-.]?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/)?.[0]?.trim() || '',
+        linkedin:  (() => { const m = text.match(/(?:linkedin\.com\/in\/|linkedin:\s*)([\w\-]+)/i); return m ? `linkedin.com/in/${m[1]}` : ''; })(),
+        github:    ghMatch ? `github.com/${ghMatch[1]}` : '',
+        portfolio: portMatch ? portMatch[1] : '',
+        location:  text.match(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)*,\s*[A-Z]{2})\b/)?.[1] || '',
+    };
+}
+
+function parseExperience(lines) {
+    const jobs = [];
+    let cur = null;
+    let pendingCompany  = null;
+    let pendingLocation = null;
+    let pendingDate     = null;
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
+        const dateMatch = line.match(DATE_RE);
+        const isBullet  = /^[•\-\*▪]\s+/.test(line);
+
+        if (isBullet) {
+            if (cur) cur.bullets.push(sanitize(line.replace(/^[•\-\*▪]\s+/, '')));
+            continue;
+        }
+
+        if (dateMatch) {
+            // Line contains a date range → start new job entry
+            const withoutDate = line.replace(DATE_RE, '').replace(/[-–—]\s*$/, '').trim();
+            if (cur) jobs.push(cur);
+            cur = {
+                role:     withoutDate || '',
+                company:  pendingCompany  || '',
+                location: pendingLocation || '',
+                dates:    dateMatch[0].trim(),
+                bullets:  [],
+            };
+            pendingCompany  = null;
+            pendingLocation = null;
+            pendingDate     = null;
+            continue;
+        }
+
+        // Line with a location pattern (City, ST) → treat as company line
+        const locMatch = line.match(/^(.+?),\s+([A-Z]{2})$/);
+        if (locMatch && !cur?.bullets?.length) {
+            if (pendingCompany) {
+                // We already have a company — this might be location on own line
+                pendingLocation = line;
+            } else {
+                pendingCompany  = locMatch[1].trim();
+                pendingLocation = locMatch[2];
+            }
+            continue;
+        }
+
+        // Plain text line — could be company name or stray content
+        if (cur) {
+            // If no company yet, assign it
+            if (!cur.company && line.length < 80) {
+                cur.company = line;
+            } else if (line.length > 10) {
+                // Treat as a non-bulleted bullet (paragraph style)
+                cur.bullets.push(sanitize(line));
+            }
+        } else if (!pendingCompany && line.length < 80) {
+            pendingCompany = line;
+        }
+    }
+
+    if (cur) jobs.push(cur);
+    return jobs.filter(j => j.role || j.company);
+}
+
+function parseSkills(lines) {
+    const skills = [];
+    for (const line of lines) {
+        const t = line.trim(); if (!t) continue;
+        const val = t.includes(':') ? t.split(':').slice(1).join(':') : t;
+        skills.push(
+            ...val.split(/[,|;•]/)
+                .map(s => sanitize(s).trim())
+                .filter(s => s.length > 0 && s.length < 60)
+        );
+    }
+    return [...new Set(skills)];
+}
+
+function parseEducation(lines) {
+    const results = [];
+    for (const line of lines) {
+        const t = line.trim(); if (!t) continue;
+        const parts = t.split(/\s*[-–—]\s*/);
+        results.push({
+            degree:  sanitize(parts[0] || ''),
+            major:   sanitize(parts[1] || ''),
+            school:  sanitize(parts[2] || ''),
+            dates:   sanitize(parts[3] || ''),
+            details: parts.slice(4).map(s => sanitize(s)).filter(Boolean),
+        });
+    }
+    return results;
+}
+
+function parseCertifications(lines) {
+    return lines
+        .map(line => {
+            const parts = line.split(/\s*[-–—]\s*/);
+            return {
+                name:   sanitize(parts[0] || ''),
+                issuer: sanitize(parts[1] || ''),
+                year:   sanitize(parts[2] || ''),
+            };
+        })
+        .filter(c => c.name);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 9 — PAST TENSE CORRECTION
+// ══════════════════════════════════════════════════════════════════
+
+const PAST_TENSE_MAP = {
+    'Manage':'Managed','Lead':'Led','Guide':'Guided','Build':'Built',
+    'Develop':'Developed','Create':'Created','Teach':'Taught','Support':'Supported',
+    'Resolve':'Resolved','Analyze':'Analyzed','Utilize':'Utilized','Improve':'Improved',
+    'Maintain':'Maintained','Ensure':'Ensured','Coordinate':'Coordinated',
+    'Collaborate':'Collaborated','Conduct':'Conducted','Direct':'Directed',
+    'Implement':'Implemented','Increase':'Increased','Deliver':'Delivered',
+    'Design':'Designed','Drive':'Drove','Execute':'Executed','Oversee':'Oversaw',
+    'Provide':'Provided','Train':'Trained','Write':'Wrote','Deploy':'Deployed',
+};
+
+function ensurePastTense(text) {
+    const firstWord = text.match(/^([A-Z][a-z]+)/)?.[1];
+    if (!firstWord) return text;
+    if (PAST_TENSE_MAP[firstWord]) {
+        return text.replace(firstWord, PAST_TENSE_MAP[firstWord]);
+    }
+    // Handle -ing forms: Managing → Managed
+    const ingMatch = text.match(/^([A-Z][a-z]+)ing\b/);
+    if (ingMatch) {
+        const root = ingMatch[1];
+        const past = PAST_TENSE_MAP[root];
+        if (past) return text.replace(ingMatch[0], past);
     }
     return text;
 }
 
-// Single batched call — tailor summary + all bullets in one shot
-async function tailorAll(resumeData, keywords) {
-    const kwStr = keywords.all.slice(0, 10).join(', ');
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 10 — KEYWORD EXTRACTION & ATS
+// ══════════════════════════════════════════════════════════════════
 
-    // Collect all bullets with back-references
-    const bulletRefs = [];
-    resumeData.experience.forEach((job, ji) =>
-        job.bullets.forEach((b, bi) => bulletRefs.push({ ji, bi, text: b, ctx: `${job.role} at ${job.company}` }))
-    );
+const STOP_WORDS = new Set([
+    'the','a','an','and','or','is','are','was','were','be','been','being',
+    'will','would','have','has','had','do','does','did','with','for','to',
+    'of','in','on','at','by','from','as','this','that','these','those','we',
+    'our','you','your','they','their','it','its','not','but','what','which',
+    'who','how','when','where','all','any','each','both','few','more','most',
+    'other','some','such','than','then','so','if','about','into','through',
+    'during','until','after','before','while','can','may','should','must',
+    'shall','need','also','just','very','well','work','working','experience',
+    'years','year','ability','strong','excellent','good','required','preferred',
+    'plus','bonus','nice','able','team','teams','role','position','candidate',
+    'company','business','looking','seeking','join','help','make','use','used',
+    'using','new','within','per','etc','job','tasks','including','related',
+    'relevant','across','multiple','various','ensure','support','responsible',
+    'responsibilities','duties','qualifications','skills','knowledge',
+    'demonstrated','proven','hands','day','basis','part','least','two','three',
+    'five','environment','opportunities','opportunity','following','required',
+]);
 
-    const parts = [];
-    if (resumeData.summary) {
-        parts.push(`SUMMARY:\n${resumeData.summary}`);
+const TECH_PHRASES = [
+    'machine learning','deep learning','natural language processing',
+    'large language model','generative ai','artificial intelligence',
+    'data pipeline','data analysis','data science','data engineering',
+    'business intelligence','software development','software engineering',
+    'full stack','full-stack','frontend','backend','web development',
+    'api development','ci/cd','continuous integration','continuous deployment',
+    'test driven development','agile','scrum','version control',
+    'cloud computing','aws','google cloud','azure','kubernetes','docker',
+    'infrastructure as code','terraform','devops','site reliability',
+    'sql','nosql','postgresql','mysql','mongodb','redis','elasticsearch',
+    'data warehouse','etl','tableau','power bi','google analytics',
+    'project management','cross-functional','stakeholder management',
+    'customer success','account management','digital marketing',
+    'salesforce','crm','erp','jira','confluence','risk management',
+    'compliance','regulatory','kyc','aml','cip','kyc compliance',
+    'microsoft 365','google workspace','microsoft entra','azure ad',
+    'active directory','mdm','endpoint management','powershell','bash',
+    'windows','macos','tcp/ip','dhcp','dns','vpn','smtp','tcp ip',
+    'network troubleshooting','tier 1','help desk','it support',
+    'managed services','msp','vmware','hyper-v','unifi','meraki',
+    'rest api','restful api','graphql','microservices',
+    'object oriented','functional programming','system design',
+    'financial analysis','financial modeling','budget management',
+    'team leadership','people management','change management',
+    'strategic planning','bilingual','spanish','english',
+    'cad','fusion 360','onshape','3d printing','autocad',
+    'react','node.js','python','javascript','typescript','fastapi',
+    'django','tensorflow','pytorch','playwright',
+];
+
+const REQUIRED_SIGNALS = /\b(required|must have|must-have|mandatory|minimum|essential|necessary|require|requires)\b/i;
+const PREFERRED_SIGNALS = /\b(preferred|nice to have|bonus|plus|ideally|desirable|optional|advantage|advantageous|beneficial)\b/i;
+
+function extractKeywords(jobDesc) {
+    const lc = jobDesc.toLowerCase();
+    const freq = {};
+    for (const w of lc.replace(/[^a-z0-9+#.\-\s]/g, ' ').split(/\s+/)) {
+        if (w.length > 2 && !STOP_WORDS.has(w)) freq[w] = (freq[w] || 0) + 1;
     }
-    if (bulletRefs.length) {
-        parts.push(`BULLETS:\n${bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n')}`);
+
+    const detectedPhrases = TECH_PHRASES.filter(p => lc.includes(p));
+    const phraseWords = new Set(detectedPhrases.flatMap(p => p.split(' ')));
+    const topWords = Object.entries(freq)
+        .filter(([w]) => !phraseWords.has(w))
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 40)
+        .map(([w]) => w);
+
+    const all = [...new Set([...detectedPhrases, ...topWords])];
+    const required = [], preferred = [];
+
+    for (const kw of all) {
+        let idx = lc.indexOf(kw);
+        if (idx === -1) continue;
+        let isRequired = false, isPreferred = false;
+        while (idx !== -1) {
+            const win = lc.slice(Math.max(0, idx - 400), Math.min(lc.length, idx + 400));
+            if (REQUIRED_SIGNALS.test(win)) { isRequired = true; break; }
+            if (PREFERRED_SIGNALS.test(win)) isPreferred = true;
+            idx = lc.indexOf(kw, idx + 1);
+        }
+        if (isRequired || (freq[kw] || 0) >= 3) required.push(kw);
+        else if (isPreferred || (freq[kw] || 0) >= 2) preferred.push(kw);
+        else preferred.push(kw);
     }
-    if (!parts.length) return;
 
-    const prompt =
-        `You are a resume writer. Select and rewrite only the most relevant bullets for a role requiring: ${kwStr}.\n\n` +
-        `Rules:\n` +
-        `- SUMMARY: 2 sentences, professional, include relevant keywords.\n` +
-        `- BULLETS: Start with a strong PAST-TENSE action verb (e.g., "Led", "Guided", "Developed"). ≤22 words each. Keep all numbers/metrics. Include [Company] context tag.\n` +
-        `- NO CITATIONS: Do not include any [cite] tags or numbers in brackets.\n` +
-        `- Output ONLY the rewritten content in this exact format:\n` +
-        `SUMMARY: <rewritten summary>\n` +
-        `BULLETS:\n1. [Company Name] <bullet>\n2. [Company Name] <bullet>\n...\n\n` +
-        parts.join('\n\n') + '\n\nRewritten:';
-
-    const maxTok = 80 + bulletRefs.length * 55;
-    const raw = await generate(prompt, Math.min(maxTok, 1200));
-    if (!raw) return;
-
-    // Parse summary
-    const sumMatch = raw.match(/SUMMARY:\s*(.+?)(?=\nBULLETS|\n\n|$)/is);
-    if (sumMatch) {
-        const s = sumMatch[1].trim();
-        if (s.length > 20) resumeData.summary = s;
-    }
-
-    // Parse bullets — clear existing then map by context
-    const bullSection = raw.match(/BULLETS?:\s*([\s\S]+)/i)?.[1] || raw;
-    const lines = bullSection.split('\n')
-        .map(l => l.trim())
-        .filter(l => /^\d+[.)]\s+\S/.test(l));
-
-    resumeData.experience.forEach(j => j.bullets = []);
-    lines.forEach(line => {
-        const match = line.match(/^\d+[.)]\s+\[(.*?)\]\s+(.*)/);
-        if (!match) return;
-        const [_, context, text] = match;
-        const job = resumeData.experience.find(j => `${j.role} at ${j.company}`.includes(context) || context.includes(j.company));
-        if (job && text.length > 10) job.bullets.push(text.trim());
-    });
+    return { required, preferred, all: [...new Set([...required, ...preferred])] };
 }
 
-// ── FILE PARSING ──────────────────────────────────────────────────────────────
+function reorderSkills(skills, requiredKeywords) {
+    const kwSet = new Set(requiredKeywords.map(k => k.toLowerCase()));
+    const matched   = skills.filter(s => kwSet.has(s.toLowerCase()) || requiredKeywords.some(kw => s.toLowerCase().includes(kw.toLowerCase()) || kw.toLowerCase().includes(s.toLowerCase())));
+    const unmatched = skills.filter(s => !matched.includes(s));
+    return [...matched, ...unmatched];
+}
+
+function kwMatch(kw, text) {
+    const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${esc}\\b`, 'i').test(text)) return true;
+    if (kw.length > 3 && text.toLowerCase().includes(kw.toLowerCase())) return true;
+    const stem = kw.replace(/(?:ing|ed|er|es|s)$/i, '');
+    if (stem.length > 3 && stem !== kw) {
+        return new RegExp(`\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(text);
+    }
+    return false;
+}
+
+function scoreATS(data, keywords) {
+    const textBlocks = {
+        summary:    data.summary || '',
+        experience: data.experience.map(j => [j.role, j.company, ...j.bullets].join(' ')).join(' '),
+        skills:     data.skills.join(' '),
+    };
+    const allText = Object.values(textBlocks).join(' ').toLowerCase();
+
+    const reqHit  = keywords.required.filter(kw => kwMatch(kw, allText));
+    const reqMiss = keywords.required.filter(kw => !kwMatch(kw, allText));
+    const prefHit = keywords.preferred.filter(kw => kwMatch(kw, allText));
+    const prefMiss= keywords.preferred.filter(kw => !kwMatch(kw, allText));
+
+    const tw = keywords.required.length * 2 + keywords.preferred.length;
+    const mw = reqHit.length * 2 + prefHit.length;
+    const overall = tw > 0 ? Math.round((mw / tw) * 100) : 0;
+
+    const allKws = [...keywords.required, ...keywords.preferred];
+    const sectionScores = {};
+    for (const [name, t] of Object.entries(textBlocks)) {
+        const hit = allKws.filter(kw => kwMatch(kw, t.toLowerCase()));
+        sectionScores[name] = allKws.length > 0 ? Math.round((hit.length / allKws.length) * 100) : 0;
+    }
+
+    return {
+        overall, sectionScores,
+        requiredMatched: reqHit.length, requiredTotal: keywords.required.length,
+        preferredMatched: prefHit.length, preferredTotal: keywords.preferred.length,
+        missingRequired: reqMiss,
+        missingPreferred: prefMiss,
+    };
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 11 — TEMPLATE RENDERER
+// ══════════════════════════════════════════════════════════════════
+
+function renderResume(data) {
+    const page = dom.resumeTpl.content.cloneNode(true).querySelector('.resume-page');
+
+    const fill = (slot, val) => {
+        const el = page.querySelector(`[data-slot="${slot}"]`);
+        if (!el) return;
+        // Sanitize one more time at render for safety
+        const safe = sanitize(String(val || ''));
+        if (el.tagName === 'A') {
+            el.textContent = safe;
+            // Add https:// if it looks like a URL and doesn't have a protocol
+            if (safe && !safe.startsWith('http')) el.href = 'https://' + safe;
+            else if (safe) el.href = safe;
+        } else {
+            el.textContent = safe;
+        }
+    };
+
+    fill('name',      data.contact.name  || 'Your Name');
+    fill('email',     data.contact.email);
+    fill('phone',     data.contact.phone);
+    fill('location',  data.contact.location);
+    fill('linkedin',  data.contact.linkedin);
+    fill('github',    data.contact.github);
+    fill('portfolio', data.contact.portfolio);
+
+    // Hide separators for empty optional fields
+    for (const field of ['phone', 'location', 'linkedin', 'github', 'portfolio']) {
+        if (!data.contact[field]) {
+            page.querySelector(`[data-hide-if-empty="${field}"]`)?.remove();
+            page.querySelector(`[data-slot="${field}"]`)?.remove();
+        }
+    }
+
+    fill('summary', data.summary);
+    if (!data.summary) page.querySelector('[data-hide-if-empty="summary"]')?.remove();
+
+    // Respect section order from drag chips
+    const orderChips  = Array.from(dom.sectionOrderList.querySelectorAll('.section-chip'));
+    const desiredOrder = orderChips.map(c => c.dataset.section);
+    const header = page.querySelector('.r-header');
+    desiredOrder.forEach(secName => {
+        const secEl = page.querySelector(`[data-section="${secName}"]`);
+        if (secEl) page.appendChild(secEl);
+    });
+
+    // Experience
+    const expCont = page.querySelector('[data-repeat="experience"]');
+    if (expCont) {
+        if (!data.experience.length) {
+            expCont.closest('[data-section="experience"]')?.remove();
+        } else {
+            data.experience.forEach(j => expCont.appendChild(buildExpItem(j)));
+        }
+    }
+
+    // Skills
+    const skillsSlot = page.querySelector('[data-slot="skills"]');
+    if (skillsSlot) {
+        if (!data.skills.length) {
+            skillsSlot.closest('[data-section="skills"]')?.remove();
+        } else {
+            const unique = [...new Set(data.skills)];
+            unique.forEach(s => {
+                const tag = document.createElement('span');
+                tag.className = 'r-skill-tag';
+                // Smart title case: preserve acronyms (AWS, CRM, SQL etc.)
+                tag.textContent = s.split(' ').map(w => {
+                    if (/^[A-Z0-9+#.]{2,}$/.test(w)) return w; // all-caps = acronym
+                    return w.charAt(0).toUpperCase() + w.slice(1);
+                }).join(' ');
+                skillsSlot.appendChild(tag);
+            });
+        }
+    }
+
+    // Education + Certifications
+    const eduCont = page.querySelector('[data-repeat="education"]');
+    if (eduCont) {
+        const hasEdu  = data.education?.length > 0;
+        const hasCert = data.certifications?.length > 0;
+        if (!hasEdu && !hasCert) {
+            eduCont.closest('[data-section="education"]')?.remove();
+        } else {
+            if (hasEdu) data.education.forEach(e => eduCont.appendChild(buildEduItem(e)));
+            if (hasCert) {
+                const certHdr = document.createElement('div');
+                certHdr.style.cssText = 'font-weight:700;font-size:8pt;text-transform:uppercase;letter-spacing:2px;color:#7c3aed;border-bottom:1.5px solid #e4d9fd;padding-bottom:2px;margin:10px 0 6px 0;';
+                certHdr.textContent = 'Certifications';
+                eduCont.appendChild(certHdr);
+                data.certifications.forEach(c => eduCont.appendChild(buildCertItem(c)));
+            }
+        }
+    }
+
+    dom.resumeOutput.innerHTML = '';
+    dom.resumeOutput.appendChild(page);
+}
+
+function buildExpItem(job) {
+    const d = document.createElement('div');
+    d.className = 'r-exp-item';
+
+    const hdr = document.createElement('div'); hdr.className = 'r-exp-header';
+    const role = document.createElement('span'); role.className = 'r-exp-role';
+    role.textContent = sanitize(job.role || '');
+    const dates = document.createElement('span'); dates.className = 'r-exp-dates';
+    dates.textContent = sanitize(job.dates || '');
+    hdr.append(role, dates);
+    d.appendChild(hdr);
+
+    if (job.company || job.location) {
+        const sub = document.createElement('div'); sub.className = 'r-exp-subheader';
+        const co = document.createElement('span'); co.className = 'r-exp-company';
+        co.textContent = sanitize(job.company || '');
+        const loc = document.createElement('span'); loc.className = 'r-exp-location';
+        loc.textContent = sanitize(job.location || '');
+        sub.append(co, loc);
+        d.appendChild(sub);
+    }
+
+    if (job.bullets?.length) {
+        const ul = document.createElement('ul'); ul.className = 'r-bullets';
+        job.bullets.forEach(b => {
+            const safe = ensurePastTense(sanitize(String(b)));
+            if (!safe) return;
+            const li = document.createElement('li');
+            li.textContent = safe;
+            ul.appendChild(li);
+        });
+        d.appendChild(ul);
+    }
+    return d;
+}
+
+function buildEduItem(edu) {
+    const d = document.createElement('div'); d.className = 'r-edu-item';
+    const hdr = document.createElement('div'); hdr.className = 'r-edu-header';
+    const deg = document.createElement('span'); deg.className = 'r-edu-degree';
+    deg.textContent = [sanitize(edu.degree), sanitize(edu.major)].filter(Boolean).join(' — ');
+    const dates = document.createElement('span'); dates.className = 'r-edu-dates';
+    dates.textContent = sanitize(edu.dates || '');
+    hdr.append(deg, dates);
+    d.appendChild(hdr);
+    const sch = document.createElement('div'); sch.className = 'r-edu-school';
+    sch.textContent = sanitize(edu.school || '');
+    d.appendChild(sch);
+    if (edu.details?.length) {
+        const det = document.createElement('div'); det.className = 'r-edu-details';
+        det.textContent = edu.details.map(s => sanitize(s)).join(' · ');
+        d.appendChild(det);
+    }
+    return d;
+}
+
+function buildCertItem(cert) {
+    const d = document.createElement('div'); d.className = 'r-cert-item';
+    const left = document.createElement('span');
+    const name = document.createElement('span'); name.className = 'r-cert-name';
+    name.textContent = sanitize(cert.name || '');
+    const issuer = document.createElement('span'); issuer.className = 'r-cert-issuer';
+    if (cert.issuer) issuer.textContent = ' — ' + sanitize(cert.issuer);
+    left.append(name, issuer);
+    const right = document.createElement('span'); right.className = 'r-cert-year';
+    right.textContent = sanitize(cert.year || '');
+    d.append(left, right);
+    return d;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 12 — ATS RENDER
+// ══════════════════════════════════════════════════════════════════
+
+function renderATS(r) {
+    const grade = r.overall >= 70 ? 'high' : r.overall >= 45 ? 'mid' : 'low';
+    dom.atsScoreNum.textContent = `${r.overall}%`;
+    dom.atsScoreNum.className   = `ats-score-num ${grade}`;
+    dom.atsBarFill.style.width  = `${r.overall}%`;
+    dom.atsBarFill.className    = `ats-bar-fill ${grade}`;
+    dom.atsBarLabel.textContent = 'Keyword match';
+
+    dom.atsCounts.innerHTML = `
+        <div class="ats-count-row required"><span class="icon">✔</span> Required: ${r.requiredMatched}/${r.requiredTotal} matched</div>
+        <div class="ats-count-row preferred"><span class="icon">◆</span> Preferred: ${r.preferredMatched}/${r.preferredTotal} matched</div>`;
+
+    dom.atsMissingRequired.style.display = r.missingRequired.length ? 'flex' : 'none';
+    dom.atsMissingRequiredList.innerHTML = r.missingRequired.slice(0, 12).map(kw => `<span class="kw-tag required">${kw}</span>`).join('');
+    dom.atsMissingPreferred.style.display = r.missingPreferred.length ? 'flex' : 'none';
+    dom.atsMissingPreferredList.innerHTML = r.missingPreferred.slice(0, 12).map(kw => `<span class="kw-tag preferred">${kw}</span>`).join('');
+
+    dom.atsSections.innerHTML = Object.entries(r.sectionScores).map(([n, p]) => `
+        <div class="ats-section-row">
+            <span class="ats-section-name">${n[0].toUpperCase() + n.slice(1)}</span>
+            <div class="ats-mini-bar"><div class="ats-mini-fill" style="width:${p}%"></div></div>
+            <span class="ats-section-pct">${p}%</span>
+        </div>`).join('');
+
+    dom.atsPanel.classList.add('visible');
+}
+
+function handleResumeEdit() {
+    if (!session?.keywords) return;
+    const text = dom.resumeOutput.innerText;
+    const result = scoreATS(
+        { summary: text, experience: [], skills: [] },
+        session.keywords
+    );
+    renderATS({ ...result, sectionScores: {} });
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 13 — PROGRESS LOG
+// ══════════════════════════════════════════════════════════════════
+
+let totalSteps = 0, completedSteps = 0;
+
+function initProgress(steps) {
+    totalSteps = steps; completedSteps = 0;
+    dom.statusMessages.innerHTML = '';
+    dom.genProgressBar.classList.add('visible');
+    dom.genProgressFill.style.width = '0%';
+}
+
+function log(msg, status = 'active') {
+    dom.statusMessages.querySelector('.active')?.classList.replace('active', 'done');
+    const line = document.createElement('div');
+    line.className = `status-line ${status}`;
+    line.textContent = msg;
+    dom.statusMessages.appendChild(line);
+    dom.statusMessages.scrollTop = dom.statusMessages.scrollHeight;
+    completedSteps++;
+    dom.genProgressFill.style.width = `${Math.min(Math.round((completedSteps / totalSteps) * 100), 95)}%`;
+}
+
+function finishProgress() {
+    dom.statusMessages.querySelector('.active')?.classList.replace('active', 'done');
+    dom.genProgressFill.style.width = '100%';
+    setTimeout(() => dom.genProgressBar.classList.remove('visible'), 900);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 14 — MAIN ORCHESTRATOR
+// ══════════════════════════════════════════════════════════════════
+
+async function handleGenerate() {
+    if (isGenerating) return;
+
+    const masterText  = dom.masterInput.value.trim();
+    const jobDescText = dom.jobDescInput.value.trim();
+
+    if (!masterText)  { alert('Please paste your master resume first.'); return; }
+    if (!jobDescText) { alert('Please paste the job description first.'); return; }
+    if (!getGroqKey() && !getGemKey()) { alert('Please save at least one API key first.'); return; }
+
+    isGenerating = true;
+    dom.generateBtn.disabled = true;
+    dom.generateBtn.classList.add('generating');
+    dom.generateBtn.textContent = 'Generating…';
+    dom.pdfBtn.disabled = true;
+    dom.atsPanel.classList.remove('visible');
+
+    try {
+        // Parse and validate master resume
+        const masterData = parseResume(masterText);
+
+        if (!masterData.contact.name) {
+            throw new Error('Could not read your name from the resume. Make sure the "# CONTACT" section is present and your name is the first line.');
+        }
+        if (!masterData.experience.length) {
+            throw new Error('No experience entries found. Make sure the "# EXPERIENCE" section is present with job dates.');
+        }
+
+        // Keywords — reuse if same job description
+        if (!session || session.jobDescText !== jobDescText) {
+            log('Analyzing job description…');
+            const keywords = extractKeywords(jobDescText);
+            session = { keywords, jobDescText, atsResult: null, resumeData: null, count: 0 };
+        }
+        const { keywords } = session;
+        const isRefinement = session.count > 0 && !!session.atsResult;
+
+        initProgress(isRefinement ? 4 : 5);
+        session.count++;
+
+        let tailored;
+
+        if (isRefinement) {
+            log(`Refinement pass — targeting ${session.atsResult.missingRequired.length} missing keywords…`);
+            tailored = await tailorResume(masterData, keywords, jobDescText, session.atsResult);
+        } else {
+            log('Tailoring resume…');
+            tailored = await tailorResume(masterData, keywords, jobDescText, null);
+        }
+
+        log('Reordering skills by relevance…');
+        tailored.skills = reorderSkills(tailored.skills, keywords.required);
+
+        log('Rendering resume…');
+        renderResume(tailored);
+
+        const atsResult = scoreATS(tailored, keywords);
+        renderATS(atsResult);
+
+        session.atsResult  = atsResult;
+        session.resumeData = tailored;
+
+        finishProgress();
+        log(`Done · ${atsResult.overall}% ATS match${session.count > 1 ? ` (pass ${session.count})` : ''}`, 'done');
+        dom.pdfBtn.disabled = false;
+
+    } catch (err) {
+        console.error('[ResumeGen Error]', err);
+        log(`Error: ${err.message}`);
+        finishProgress();
+    } finally {
+        isGenerating = false;
+        dom.generateBtn.disabled = false;
+        dom.generateBtn.classList.remove('generating');
+        dom.generateBtn.textContent = session?.count > 0 ? 'Refine Resume' : 'Generate Tailored Resume';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 15 — UTILITY HANDLERS
+// ══════════════════════════════════════════════════════════════════
+
+function printResume() {
+    const page = dom.resumeOutput.querySelector('.resume-page');
+    if (!page) { alert('Generate a resume first.'); return; }
+    dom.printTarget.innerHTML = page.outerHTML;
+    window.addEventListener('afterprint', () => { dom.printTarget.innerHTML = ''; }, { once: true });
+    window.print();
+}
+
+function handleReset() {
+    session = null;
+    dom.generateBtn.textContent = 'Generate Tailored Resume';
+    dom.masterInput.value = '';
+    dom.jobDescInput.value = '';
+    dom.statusMessages.innerHTML = '';
+    dom.genProgressBar.classList.remove('visible');
+    dom.atsPanel.classList.remove('visible');
+    dom.pdfBtn.disabled = true;
+    dom.generateBtn.disabled = !getGroqKey() && !getGemKey();
+    dom.resumeOutput.innerHTML = `
+        <div class="resume-placeholder">
+            <div class="placeholder-icon">📄</div>
+            <p>Your tailored resume will appear here</p>
+            <small>Paste your resume + job description, then click Generate</small>
+        </div>`;
+}
+
+async function handleFileUpload(inputEl, targetTextarea) {
+    const file = inputEl.files[0];
+    if (!file) return;
+    const orig = targetTextarea.placeholder;
+    targetTextarea.placeholder = `Parsing ${file.name}…`;
+    try {
+        targetTextarea.value = await parseFile(file);
+        if (targetTextarea === dom.masterInput) {
+            setTimeout(() => handleBuildMasterDatabase(), 200);
+        }
+    } catch (err) {
+        alert(`Could not parse ${file.name}: ${err.message}\n\nTry pasting the text instead.`);
+    }
+    targetTextarea.placeholder = orig;
+    inputEl.value = '';
+}
+
+// ── FILE PARSING ──────────────────────────────────────────────────
 
 async function parseFile(file) {
     const ext = file.name.split('.').pop().toLowerCase();
-    if (ext === 'pdf')  return await parsePDF(file);
-    if (ext === 'docx') return await parseDOCX(file);
-    if (ext === 'doc')  return await parseDocLegacy(file);
-    if (ext === 'rtf')  return await parseRTF(file);
-    return await file.text();
+    if (ext === 'pdf')  return parsePDF(file);
+    if (ext === 'docx') return parseDOCX(file);
+    if (ext === 'doc')  return parseDocLegacy(file);
+    if (ext === 'rtf')  return parseRTF(file);
+    return file.text();
 }
 
 async function parsePDF(file) {
@@ -438,648 +1234,45 @@ async function parseRTF(file) {
         .replace(/[{}\\]/g, ' ').replace(/\s{2,}/g, '\n').trim();
 }
 
-// ── RESUME PARSER ─────────────────────────────────────────────────────────────
-
-const SECTION_HEADERS = {
-    contact:    /^(contact|personal info?|contact info?)\s*[:\-]?\s*$/i,
-    summary:    /^(summary|professional summary|objective|profile|about me?)\s*[:\-]?\s*$/i,
-    experience: /^(experience|work experience|employment(?: history)?|work history|professional experience|career history)\s*[:\-]?\s*$/i,
-    skills:     /^(skills?|technical skills?|core competenc(?:y|ies)|technologies|tools?|expertise)\s*[:\-]?\s*$/i,
-    education:  /^(education|academic(?:s| background)?|qualifications?|degrees?)\s*[:\-]?\s*$/i,
-};
-
-const DATE_RANGE_RE = /(\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}|\d{4})\s*[-–—to]+\s*(\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}|\d{4}|Present|Current|Now)/i;
-
-function parseResume(raw) {
-    const lines = raw.replace(/\r\n/g, '\n').split('\n').map(l => l.replace(/^#+\s*/, '').trimEnd());
-    const sec = { contact: [], summary: [], experience: [], skills: [], education: [] };
-    let cur = 'contact';
-    for (const line of lines) {
-        const t = line.trim();
-        let hit = false;
-        for (const [k, re] of Object.entries(SECTION_HEADERS)) { if (re.test(t)) { cur = k; hit = true; break; } }
-        if (!hit) sec[cur].push(line);
-    }
-    return {
-        contact:    parseContact(sec.contact),
-        summary:    sec.summary.map(l => l.trim()).filter(Boolean).join(' '),
-        experience: parseExperience(sec.experience),
-        skills:     parseSkills(sec.skills),
-        education:  parseEducation(sec.education),
-    };
-}
-
-function parseContact(lines) {
-    const text = lines.join(' ');
-    const rawName = lines.find(l => l.trim())?.trim() || '';
-    // Strip common "master resume" database title suffixes
-    const name = rawName
-        .replace(/\s*[-–—]\s*(MASTER\s+RESUME(\s+DATABASE)?|RESUME\s+DATABASE|DATABASE)\s*$/i, '')
-        .replace(/\s*[-–—]\s*COMPREHENSIVE.*$/i, '')
-        .trim();
-    return {
-        name,
-        email:    text.match(/[\w.+\-]+@[\w.\-]+\.[a-z]{2,}/i)?.[0] || '',
-        phone:    text.match(/(\+?1?\s?[\-.]?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/)?.[0]?.trim() || '',
-        linkedin: (() => { const m = text.match(/(?:linkedin\.com\/in\/|linkedin:\s*)([\w\-]+)/i); return m ? `linkedin.com/in/${m[1]}` : ''; })(),
-        location: text.match(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)*,\s*[A-Z]{2})\b/)?.[1] || '',
-    };
-}
-
-function parseExperience(lines) {
-    // Pre-join lines that are split by PDF column extraction.
-    // Handles cases like: "The Church of Jesus Christ of Latter-day" + "Saints — Chicago, IL"
-    // and: "CarMax — South" + "Jordan, UT"
-    const joined = [];
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        const next = lines[i + 1]?.trim() || '';
-        if (!line) { joined.push(''); continue; }
-        // Next line has em-dash but no date → cur is a continuation of a company name
-        if (next && /[—–]/.test(next) && !next.match(DATE_RANGE_RE) && !line.match(DATE_RANGE_RE)) {
-            joined.push(line + ' ' + next); i++; continue;
-        }
-        // Cur has em-dash but no state code, next looks like "City, ST" continuation
-        if (/[—–]/.test(line) && !line.match(/,\s*[A-Z]{2}\b/) && !line.match(DATE_RANGE_RE)
-            && next && /^[A-Z][a-z]/.test(next) && next.match(/,\s*[A-Z]{2}\b/)) {
-            joined.push(line + ' ' + next); i++; continue;
-        }
-        joined.push(line);
-    }
-
-    const jobs = []; let cur = null; let pendingCo = null; let pendingDate = null;
-    for (const rawLine of joined) {
-        const line = rawLine.trim();
-        if (!line) continue;
-        const dm         = line.match(DATE_RANGE_RE);
-        const isBullet   = /^[•\-\*]\s+|^\d+\.\s+/.test(line);
-        const hasDash    = /[—–\-]/.test(line);
-
-        if (dm) {
-            const withoutDate = line.replace(DATE_RANGE_RE, '').trim();
-            // If the line is ONLY a date (nothing else), save it for the next real role line
-            // to avoid creating a phantom empty-role job entry
-            if (!withoutDate && !pendingCo) {
-                pendingDate = dm[0].trim();
-                continue;
-            }
-            // Line contains a date range → this is the role line
-            if (cur) jobs.push(cur);
-            // Role may be "Role — Company" or just "Role"
-            const parts = withoutDate.split(/\s+[—–\-]\s+|\s*[—–]\s*/).map(s => s.trim()).filter(Boolean);
-            cur = {
-                role:     parts[0] || '',
-                company:  pendingCo ? pendingCo.name : (parts[1] || ''),
-                location: pendingCo ? pendingCo.loc  : (parts[2] || ''),
-                dates:    pendingDate || dm[0].trim(),
-                bullets:  [],
-            };
-            pendingDate = null;
-            pendingCo = null;
-        } else if (hasDash && !isBullet && !cur?.bullets?.length) {
-            // Company — Location header (no date, no bullets yet)
-            const dashIdx = line.search(/[—–\-]/);
-            const name = line.slice(0, dashIdx).trim();
-            const loc  = line.slice(dashIdx + 1).trim();
-
-            // If the "location" part looks like a date range, it's actually dates
-            if (DATE_RANGE_RE.test(loc) && !pendingDate) {
-                pendingDate = loc;
-                pendingCo = { name, loc: '' };
-            } else {
-                pendingCo = { name, loc };
-            }
-        } else if (isBullet) {
-            if (cur) cur.bullets.push(line.replace(/^[•\-\*\d]+\.?\s+/, '').trim());
-        } else if (cur) {
-            // Non-bulleted text after a role line → treat as implicit bullet (description paragraph)
-            if (!cur.company && line.length < 60 && !line.match(/[.!?]$/)) {
-                cur.company = line; // short, no terminal punctuation → probably company name
-            } else if (line.length > 15) {
-                cur.bullets.push(line); // descriptive sentence → implicit bullet
-            }
-        }
-    }
-    if (cur) jobs.push(cur);
-    // Filter out phantom entries (no role and no company) — these are date-only artifacts
-    return jobs.filter(j => j.role || j.company);
-}
-
-function parseSkills(lines) {
-    const skills = [];
-    for (const line of lines) {
-        const t = line.trim(); if (!t) continue;
-        const val = t.includes(':') ? t.split(':').slice(1).join(':') : t;
-        skills.push(...val.split(/[,|;]/).map(s => s.trim()).filter(s => s.length > 0 && s.length < 50));
-    }
-    return [...new Set(skills)];
-}
-
-function parseEducation(lines) {
-    // Matches "Expected May 2028", "May 2028", "Expected 2028", etc.
-    const EXPECTED_DATE_RE = /\b(?:Expected\s+)?(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}\b|\bExpected\s+\d{4}\b/i;
-    const degs = []; let cur = null;
-    for (const rawLine of lines) {
-        const line = rawLine.trim(); if (!line) continue;
-        const dm = line.match(DATE_RANGE_RE) || line.match(EXPECTED_DATE_RE) || line.match(/\b(19|20)\d{2}\b/);
-        if (dm) {
-            if (cur && (cur.school || cur.degree)) degs.push(cur);
-            const dateStr = dm[0];
-            // Remove the date and any trailing dash, then split by em-dash to get school + degree
-            const withoutDate = line.replace(dateStr, '').replace(/\s*[—–\-]\s*$/, '').trim();
-            const parts = withoutDate.split(/\s*[—–]\s*/).map(s => s.trim()).filter(Boolean);
-            // Detect whether the first part is a school name or a degree word
-            const firstIsDegree = parts[0] && /^(bachelor|master|associate|doctor|phd|bs|ms|ba|ma|mba)\b/i.test(parts[0]);
-            cur = {
-                school: firstIsDegree ? (parts[1] || '') : (parts[0] || ''),
-                degree: firstIsDegree ? (parts[0] || '') : (parts[1] || ''),
-                dates:  dateStr,
-            };
-        } else if (cur) {
-            if (!cur.school) cur.school = line; else if (!cur.degree) cur.degree = line;
-        } else { cur = { school: line, degree: '', dates: '' }; }
-    }
-    if (cur && (cur.school || cur.degree)) degs.push(cur);
-    return degs;
-}
-
-// ── KEYWORD EXTRACTION ────────────────────────────────────────────────────────
-
-const STOP_WORDS = new Set([
-    'the','a','an','and','or','is','are','was','were','be','been','being','will','would',
-    'have','has','had','do','does','did','with','for','to','of','in','on','at','by','from',
-    'as','this','that','these','those','we','our','you','your','they','their','it','its',
-    'not','but','what','which','who','how','when','where','all','any','each','both','few',
-    'more','most','other','some','such','than','then','so','if','about','into','through',
-    'during','until','after','before','while','can','may','should','must','shall','need',
-    'also','just','very','well','work','working','experience','years','year','ability',
-    'strong','excellent','good','required','preferred','plus','bonus','nice','able','team',
-    'teams','role','position','candidate','company','business','looking','seeking','join',
-    'help','build','make','use','used','using','new','within','per','etc','job','tasks',
-    'including','related','relevant','across','multiple','various','ensure','support',
-    'responsible','responsibilities','duties','qualifications','skills','knowledge',
-    'demonstrated','proven','hands','day','basis','part','least','three','five','two',
-]);
-
-const REQUIRED_SIGNALS = /\b(required|must have|must-have|mandatory|minimum|essential|necessary|require|requires)\b/i;
-const PREFERRED_SIGNALS = /\b(preferred|nice to have|bonus|plus|ideally|desirable|optional|advantage|advantageous|beneficial)\b/i;
-
-const TECH_PHRASES = [
-    // Engineering & dev
-    'machine learning','deep learning','natural language processing','computer vision',
-    'large language model','large language models','generative ai','artificial intelligence',
-    'data pipeline','data analysis','data science','data engineering','data visualization',
-    'business intelligence','business analysis','product management','product development',
-    'software development','software engineering','full stack','full-stack','front end','back end',
-    'frontend','backend','mobile development','web development','api development',
-    'ci/cd','continuous integration','continuous deployment','continuous delivery',
-    'rest api','restful api','graphql','microservices','event driven','message queue',
-    'test driven development','unit testing','integration testing','end to end testing',
-    'agile','scrum','kanban','sprint','version control','code review',
-    'object oriented','functional programming','system design','distributed systems',
-    // Cloud & infra
-    'cloud computing','cloud infrastructure','aws','google cloud','azure',
-    'kubernetes','docker','containerization','infrastructure as code','terraform',
-    'serverless','lambda','ec2','s3','rds','devops','site reliability','sre',
-    // Data & analytics
-    'sql','nosql','postgresql','mysql','mongodb','redis','elasticsearch',
-    'data warehouse','data lake','etl','spark','hadoop','airflow','dbt',
-    'tableau','power bi','looker','google analytics','a/b testing',
-    // Business & ops
-    'project management','program management','cross-functional','stakeholder management',
-    'customer success','customer experience','account management','relationship management',
-    'digital marketing','social media','content marketing','seo','sem','paid media',
-    'salesforce','crm','erp','jira','confluence','slack',
-    // Finance & compliance
-    'financial analysis','financial modeling','budget management','p&l',
-    'risk management','compliance','regulatory','audit','kyc','aml','cip',
-    // People
-    'team leadership','people management','performance management','talent acquisition',
-    'change management','strategic planning','executive communication',
-];
-
-function extractKeywords(jobDesc) {
-    const lc = jobDesc.toLowerCase();
-    const freq = {};
-    for (const w of lc.replace(/[^a-z0-9+#.\-\s]/g, ' ').split(/\s+/)) {
-        if (w.length > 2 && !STOP_WORDS.has(w)) freq[w] = (freq[w] || 0) + 1;
-    }
-    // Detect multi-word phrases first (they take priority over constituent words)
-    const detectedPhrases = TECH_PHRASES.filter(p => lc.includes(p));
-    const phraseWords = new Set(detectedPhrases.flatMap(p => p.split(' ')));
-
-    // Take top 40 single words, excluding words already covered by a phrase
-    const topWords = Object.entries(freq)
-        .filter(([w]) => !phraseWords.has(w))
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 40)
-        .map(([w]) => w);
-
-    const all = [...new Set([...detectedPhrases, ...topWords])];
-    const required = [], preferred = [];
-
-    for (const kw of all) {
-        let idx = lc.indexOf(kw);
-        if (idx === -1) continue;
-        // Scan all occurrences for the strongest signal
-        let isRequired = false, isPreferred = false;
-        while (idx !== -1) {
-            const win = lc.slice(Math.max(0, idx - 400), Math.min(lc.length, idx + 400));
-            if (REQUIRED_SIGNALS.test(win)) { isRequired = true; break; }
-            if (PREFERRED_SIGNALS.test(win)) isPreferred = true;
-            idx = lc.indexOf(kw, idx + 1);
-        }
-        if (isRequired || (freq[kw] || 0) >= 3) required.push(kw);
-        else if (isPreferred) preferred.push(kw);
-        else ((freq[kw] || 0) >= 2 ? required : preferred).push(kw);
-    }
-    return { required, preferred, all: [...new Set([...required, ...preferred])] };
-}
-
-function reorderSkills(skills, keywords) {
-    const kwSet = new Set(keywords.map(k => k.toLowerCase()));
-    const matched   = skills.filter(s => kwSet.has(s.toLowerCase()) || keywords.some(kw => s.toLowerCase().includes(kw) || kw.includes(s.toLowerCase())));
-    const unmatched = skills.filter(s => !matched.includes(s));
-    return [...matched, ...unmatched];
-}
-
-// ── TEMPLATE RENDERER ─────────────────────────────────────────────────────────
-
-function renderResume(data) {
-    const page = dom.resumeTpl.content.cloneNode(true).querySelector('.resume-page');
-    const fill = (slot, val) => { const el = page.querySelector(`[data-slot="${slot}"]`); if (el) el.textContent = val || ''; };
-
-    fill('name', data.contact.name || 'Your Name');
-    fill('email', data.contact.email);
-    fill('phone', data.contact.phone);
-    fill('location', data.contact.location);
-    fill('linkedin', data.contact.linkedin);
-    fill('summary', data.summary);
-
-    for (const f of ['phone', 'location', 'linkedin']) {
-        if (!data.contact[f]) {
-            page.querySelector(`[data-hide-if-empty="${f}"]`)?.style.setProperty('display', 'none');
-            page.querySelector(`[data-slot="${f}"]`)?.style.setProperty('display', 'none');
-        }
-    }
-
-    if (!data.summary) page.querySelector('[data-hide-if-empty="summary"]')?.remove();
-
-    const sections = Array.from(page.querySelectorAll('.r-section'));
-    const orderChips = Array.from(dom.sectionOrderList.querySelectorAll('.section-chip'));
-    const desiredOrder = orderChips.map(c => c.dataset.section);
-
-    // Reorder sections in DOM based on desiredOrder
-    const container = page.querySelector('.resume-page');
-    desiredOrder.forEach(secName => {
-        const secEl = sections.find(s => s.dataset.section === secName);
-        if (secEl) container.appendChild(secEl);
-    });
-
-    const expCont = page.querySelector('[data-repeat="experience"]');
-    if (expCont) {
-        if (!data.experience.length) expCont.closest('.r-section')?.remove();
-        else data.experience.forEach(j => expCont.appendChild(buildExpItem(j)));
-    }
-
-    const skillsSlot = page.querySelector('[data-slot="skills"]');
-    if (skillsSlot) {
-        if (!data.skills.length) skillsSlot.closest('.r-section')?.remove();
-        else data.skills.forEach(s => {
-            const tag = document.createElement('span');
-            tag.className = 'r-skill-tag'; tag.textContent = s;
-            skillsSlot.appendChild(tag);
-        });
-    }
-
-    const eduCont = page.querySelector('[data-repeat="education"]');
-    if (eduCont) {
-        if (!data.education.length) eduCont.closest('.r-section')?.remove();
-        else data.education.forEach(e => eduCont.appendChild(buildEduItem(e)));
-    }
-
-    dom.resumeOutput.innerHTML = '';
-    dom.resumeOutput.appendChild(page);
-}
-
-function buildExpItem(job) {
-    const d = document.createElement('div'); d.className = 'r-exp-item';
-    const hdr = document.createElement('div'); hdr.className = 'r-exp-header';
-    const role = document.createElement('span'); role.className = 'r-exp-role'; role.textContent = job.role || '';
-    const dates = document.createElement('span'); dates.className = 'r-exp-dates'; dates.textContent = job.dates || '';
-    hdr.append(role, dates);
-    d.appendChild(hdr);
-
-    if (job.company || job.location) {
-        const sub = document.createElement('div'); sub.className = 'r-exp-subheader';
-        const co = document.createElement('span'); co.className = 'r-exp-company'; co.textContent = job.company || '';
-        const loc = document.createElement('span'); loc.className = 'r-exp-location'; loc.textContent = job.location || '';
-        sub.append(co, loc);
-        d.appendChild(sub);
-    }
-
-    if (job.bullets?.length) {
-        const ul = document.createElement('ul'); ul.className = 'r-bullets';
-        job.bullets.forEach(b => { const li = document.createElement('li'); li.textContent = b; ul.appendChild(li); });
-        d.appendChild(ul);
-    }
-    return d;
-}
-
-function buildEduItem(edu) {
-    const d = document.createElement('div'); d.className = 'r-edu-item';
-    // Row 1: School name (bold, left) | Dates (right)
-    const hdr = document.createElement('div'); hdr.className = 'r-edu-header';
-    const sch = document.createElement('span'); sch.className = 'r-edu-degree'; sch.textContent = edu.school || edu.degree || '';
-    const dates = document.createElement('span'); dates.className = 'r-edu-dates'; dates.textContent = edu.dates || '';
-    hdr.append(sch, dates);
-    d.appendChild(hdr);
-    // Row 2: Degree name (smaller, below) — only if both fields are present
-    if (edu.degree && edu.school) {
-        const deg = document.createElement('div'); deg.className = 'r-edu-school'; deg.textContent = edu.degree;
-        d.appendChild(deg);
-    }
-    return d;
-}
-
-// ── ATS SCORER ────────────────────────────────────────────────────────────────
-
-// Soft-match: checks exact + common plural/singular/verb variants
-function kwMatch(kw, text) {
-    const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`\\b${esc}\\b`, 'i').test(text)) return true;
-    // Strip trailing 's'/'es'/'ing'/'ed'/'er' and retry
-    const stem = kw.replace(/(?:ing|ed|er|es|s)$/i, '');
-    if (stem.length > 3 && stem !== kw) {
-        return new RegExp(`\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(text);
-    }
-    return false;
-}
-
-function scoreATS(resumeData, keywords) {
-    const sections = {
-        summary:    resumeData.summary || '',
-        experience: resumeData.experience.map(j => [j.role, j.company, ...j.bullets].join(' ')).join(' '),
-        skills:     resumeData.skills.join(' '),
-    };
-    const allText = Object.values(sections).join(' ').toLowerCase();
-
-    const reqHit  = keywords.required.filter(kw => kwMatch(kw, allText));
-    const reqMiss = keywords.required.filter(kw => !kwMatch(kw, allText));
-    const prefHit = keywords.preferred.filter(kw => kwMatch(kw, allText));
-    const prefMiss = keywords.preferred.filter(kw => !kwMatch(kw, allText));
-
-    // Weight: required = 2x, preferred = 1x (mirrors most ATS weighted scoring)
-    const tw = keywords.required.length * 2 + keywords.preferred.length;
-    const mw = reqHit.length * 2 + prefHit.length;
-    const overall = tw > 0 ? Math.round((mw / tw) * 100) : 0;
-
-    const sectionScores = {};
-    const all = [...keywords.required, ...keywords.preferred];
-    for (const [n, t] of Object.entries(sections)) {
-        const hit = all.filter(kw => kwMatch(kw, t.toLowerCase()));
-        sectionScores[n] = all.length > 0 ? Math.round((hit.length / all.length) * 100) : 0;
-    }
-
-    return {
-        overall, sectionScores,
-        requiredMatched: reqHit.length, requiredTotal: keywords.required.length,
-        preferredMatched: prefHit.length, preferredTotal: keywords.preferred.length,
-        missingRequired: reqMiss,   // full list — used by iteration 2
-        missingPreferred: prefMiss, // full list
-    };
-}
-
-function renderATS(r) {
-    const grade = r.overall >= 70 ? 'high' : r.overall >= 45 ? 'mid' : 'low';
-    dom.atsScoreNum.textContent = `${r.overall}%`;
-    dom.atsScoreNum.className   = `ats-score-num ${grade}`;
-    dom.atsBarFill.style.width  = `${r.overall}%`;
-    dom.atsBarFill.className    = `ats-bar-fill ${grade}`;
-
-    dom.atsCounts.innerHTML = `
-        <div class="ats-count-row required"><span class="icon">✔</span> Required: ${r.requiredMatched}/${r.requiredTotal} matched</div>
-        <div class="ats-count-row preferred"><span class="icon">◆</span> Preferred: ${r.preferredMatched}/${r.preferredTotal} matched</div>`;
-
-    dom.atsMissingRequired.style.display = r.missingRequired.length ? 'flex' : 'none';
-    dom.atsMissingRequiredList.innerHTML = r.missingRequired.slice(0, 12).map(kw => `<span class="kw-tag required">${kw}</span>`).join('');
-    dom.atsMissingPreferred.style.display = r.missingPreferred.length ? 'flex' : 'none';
-    dom.atsMissingPreferredList.innerHTML = r.missingPreferred.slice(0, 12).map(kw => `<span class="kw-tag preferred">${kw}</span>`).join('');
-
-    dom.atsSections.innerHTML = Object.entries(r.sectionScores).map(([n, p]) => `
-        <div class="ats-section-row">
-            <span class="ats-section-name">${n[0].toUpperCase() + n.slice(1)}</span>
-            <div class="ats-mini-bar"><div class="ats-mini-fill" style="width:${p}%"></div></div>
-            <span class="ats-section-pct">${p}%</span>
-        </div>`).join('');
-
-    dom.atsPanel.classList.add('visible');
-}
-
-// ── STATUS LOG ────────────────────────────────────────────────────────────────
-
-let totalSteps = 0, completedSteps = 0;
-
-function initProgress(steps) {
-    totalSteps = steps; completedSteps = 0;
-    dom.statusMessages.innerHTML = '';
-    dom.genProgressBar.classList.add('visible');
-    dom.genProgressFill.style.width = '0%';
-}
-
-function log(message, status = 'active') {
-    dom.statusMessages.querySelector('.active')?.classList.replace('active', 'done');
-    const line = document.createElement('div');
-    line.className = `status-line ${status}`;
-    line.textContent = message;
-    dom.statusMessages.appendChild(line);
-    dom.statusMessages.scrollTop = dom.statusMessages.scrollHeight;
-    completedSteps++;
-    dom.genProgressFill.style.width = `${Math.min(Math.round((completedSteps / totalSteps) * 100), 95)}%`;
-}
-
-function finishProgress() {
-    dom.statusMessages.querySelector('.active')?.classList.replace('active', 'done');
-    dom.genProgressFill.style.width = '100%';
-    setTimeout(() => dom.genProgressBar.classList.remove('visible'), 900);
-}
-
-// ── MAIN ORCHESTRATOR ─────────────────────────────────────────────────────────
-
-async function handleGenerate() {
-    if (isGenerating) return;
-    const apiKey      = getApiKey();
-    const masterText  = dom.masterInput.value.trim();
-    const jobDescText = dom.jobDescInput.value.trim();
-    if (!apiKey)      { alert('Enter and save your Groq API key first.'); return; }
-    if (!masterText)  { alert('Please paste your master resume first.'); return; }
-    if (!jobDescText) { alert('Please paste the job description first.'); return; }
-
-    isGenerating = true;
-    dom.generateBtn.disabled = true;
-    dom.generateBtn.classList.add('generating');
-    dom.generateBtn.textContent = 'Generating…';
-    dom.pdfBtn.disabled = true;
-    dom.atsPanel.classList.remove('visible');
-
-    // Cache keywords per job description — re-extract only if job desc changed
-    if (!session || session.jobDescText !== jobDescText) {
-        session = { keywords: null, jobDescText, atsResult: null, resumeData: null, count: 0 };
-    }
-    const isRefinement = session.count > 0 && session.atsResult && session.resumeData;
-    initProgress(isRefinement ? 4 : 8);
-
-    try {
-        if (!session.keywords) {
-            log('Analyzing job description…');
-            session.keywords = extractKeywords(jobDescText);
-        }
-        const { keywords } = session;
-
-        // Use stored tailored data on refinements; parse fresh on first run
-        const resumeData = isRefinement
-            ? session.resumeData
-            : (log('Parsing master resume…'), parseResume(masterText));
-
-        if (isRefinement) {
-            // Subsequent clicks — single targeted pass on already-tailored data
-            log(`Refining (score was ${session.atsResult.overall}%) — targeting gaps…`);
-            await tailorWithGroq(resumeData, keywords, jobDescText, session.atsResult);
-        } else {
-            // First time — 2 automatic passes
-            log('Pass 1 · Initial tailoring…');
-            await tailorWithGroq(resumeData, keywords, jobDescText, null);
-
-            log('Pass 1 · Scoring…');
-            const pass1 = scoreATS(resumeData, keywords);
-            log(`Pass 1 score: ${pass1.overall}% — running pass 2…`);
-
-            log('Pass 2 · Targeting keyword gaps…');
-            await tailorWithGroq(resumeData, keywords, jobDescText, pass1);
-        }
-
-        // Post-process bullets for past tense and polish
-        resumeData.experience.forEach(j => {
-            j.bullets = j.bullets.map(b => ensurePastTense(b));
-        });
-
-        dom.sectionOrderPanel.style.display = 'block';
-
-        log('Reordering skills by relevance…');
-        resumeData.skills = reorderSkills(resumeData.skills, keywords.all);
-
-        log('Rendering resume…');
-        renderResume(resumeData);
-
-        log('Scoring ATS match…');
-        const atsResult = scoreATS(resumeData, keywords);
-        renderATS(atsResult);
-        session.atsResult = atsResult;
-        session.resumeData = resumeData;
-        session.count++;
-
-        finishProgress();
-        log(`Done — ${atsResult.overall}% ATS match${session.count > 1 ? ` (iteration ${session.count})` : ''}`, 'done');
-        dom.pdfBtn.disabled = false;
-
-    } catch (err) {
-        console.error(err);
-        log(`Error: ${err.message}`);
-        finishProgress();
-    } finally {
-        isGenerating = false;
-        dom.generateBtn.disabled = false;
-        dom.generateBtn.classList.remove('generating');
-        dom.generateBtn.textContent = session?.count > 0 ? 'Refine Resume' : 'Generate Tailored Resume';
-    }
-}
-
-// ── PRINT ─────────────────────────────────────────────────────────────────────
-
-function printResume() {
-    const page = dom.resumeOutput.querySelector('.resume-page');
-    if (!page) { alert('Generate a resume first.'); return; }
-    dom.printTarget.innerHTML = page.outerHTML;
-    window.addEventListener('afterprint', () => { dom.printTarget.innerHTML = ''; }, { once: true });
-    window.print();
-}
-
-function handleReset() {
-    session = null;
-    dom.generateBtn.textContent = 'Generate Tailored Resume';
-    dom.masterInput.value = '';
-    dom.jobDescInput.value = '';
-    dom.statusMessages.innerHTML = '';
-    dom.genProgressBar.classList.remove('visible');
-    dom.atsPanel.classList.remove('visible');
-    dom.pdfBtn.disabled = true;
-    dom.resumeOutput.innerHTML = `
-        <div class="resume-placeholder">
-            <div class="placeholder-icon">📄</div>
-            <p>Your tailored resume will appear here</p>
-            <small>Paste your resume + job description, then click Generate</small>
-        </div>`;
-}
-
-async function handleFileUpload(inputEl, targetTextarea) {
-    const file = inputEl.files[0];
-    if (!file) return;
-    const origPlaceholder = targetTextarea.placeholder;
-    targetTextarea.placeholder = `Parsing ${file.name}…`;
-    try {
-        targetTextarea.value = await parseFile(file);
-    } catch (err) {
-        alert(`Could not parse ${file.name}: ${err.message}\n\nTry pasting the text instead.`);
-    }
-    targetTextarea.placeholder = origPlaceholder;
-    inputEl.value = '';
-}
-
-// ── DRAG AND DROP ────────────────────────────────────────────────────────────
+// ── DRAG & DROP SECTION REORDER ───────────────────────────────────
 
 function initDragAndDrop() {
     const list = dom.sectionOrderList;
-    let draggedItem = null;
+    let dragging = null;
 
-    list.addEventListener('dragstart', (e) => {
-        draggedItem = e.target;
+    list.addEventListener('dragstart', e => {
+        dragging = e.target;
         e.target.classList.add('dragging');
     });
-
-    list.addEventListener('dragend', (e) => {
-        draggedItem = null;
+    list.addEventListener('dragend', e => {
         e.target.classList.remove('dragging');
-        // Re-render preview immediately when order changes
-        if (session && session.resumeData) renderResume(session.resumeData);
+        dragging = null;
+        if (session?.resumeData) renderResume(session.resumeData);
     });
-
-    list.addEventListener('dragover', (e) => {
+    list.addEventListener('dragover', e => {
         e.preventDefault();
-        const afterElement = getDragAfterElement(list, e.clientY);
-        const currentDraggedItem = document.querySelector('.dragging');
-        if (afterElement == null) {
-            list.appendChild(currentDraggedItem);
-        } else {
-            list.insertBefore(currentDraggedItem, afterElement);
+        const target = e.target.closest('.section-chip');
+        if (target && target !== dragging) {
+            const mid = target.getBoundingClientRect().left + target.getBoundingClientRect().width / 2;
+            list.insertBefore(dragging, e.clientX < mid ? target : target.nextElementSibling);
         }
     });
 }
 
-function getDragAfterElement(container, y) {
-    const draggableElements = [...container.querySelectorAll('.section-chip:not(.dragging)')];
+// ── DEBOUNCE ──────────────────────────────────────────────────────
 
-    return draggableElements.reduce((closest, child) => {
-        const box = child.getBoundingClientRect();
-        const offset = y - box.top - box.height / 2;
-        if (offset < 0 && offset > closest.offset) {
-            return { offset: offset, element: child };
-        } else {
-            return closest;
-        }
-    }, { offset: Number.NEGATIVE_INFINITY }).element;
+function debounce(fn, ms) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
-// ── EVENT LISTENERS (registered immediately on script parse) ──────────────────
+// ══════════════════════════════════════════════════════════════════
+//  SECTION 16 — BOOT
+// ══════════════════════════════════════════════════════════════════
+
+// Restore saved model preference
+const savedModel = localStorage.getItem(STORAGE_KEY_MODEL);
+if (savedModel) dom.modelSelect.value = savedModel;
 
 initDragAndDrop();
 
@@ -1087,17 +1280,16 @@ dom.generateBtn.addEventListener('click', handleGenerate);
 dom.resetBtn.addEventListener('click', handleReset);
 dom.pdfBtn.addEventListener('click', printResume);
 dom.fileJob.addEventListener('change',   () => handleFileUpload(dom.fileJob,    dom.jobDescInput));
+dom.fileMaster.addEventListener('change',() => handleFileUpload(dom.fileMaster, dom.masterInput));
+dom.masterInput.addEventListener('input', debounce(() => handleBuildMasterDatabase(), 2000));
+dom.resumeOutput.addEventListener('input', debounce(() => handleResumeEdit(), 500));
 document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleGenerate(); });
-document.getElementById('download-template-btn').addEventListener('click', handleDownloadTemplate);
+
+dom.apiKeySave.addEventListener('click', () => setGroqKey(dom.apiKeyInput.value));
+dom.geminiKeySave.addEventListener('click', () => setGemKey(dom.geminiKeyInput.value));
+dom.apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') dom.apiKeySave.click(); });
+dom.geminiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') dom.geminiKeySave.click(); });
+dom.modelSelect.addEventListener('change', () => setModelPref(dom.modelSelect.value));
 
 dom.resetBtn.disabled = false;
-
-dom.apiKeySave.addEventListener('click', () => {
-    const val = dom.apiKeyInput.value.trim();
-    if (val) setApiKey(val);
-});
-dom.apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') dom.apiKeySave.click(); });
-
-// ── INIT ──────────────────────────────────────────────────────────────────────
-
 updateApiKeyStatus();
