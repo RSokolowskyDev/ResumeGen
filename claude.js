@@ -29,7 +29,6 @@ const dom = {
     atsMissingPreferredList:document.getElementById('ats-missing-preferred-list'),
     atsSections:            document.getElementById('ats-sections'),
     resumeOutput:           document.getElementById('resume-output'),
-    fileMaster:             document.getElementById('file-master'),
     fileJob:                document.getElementById('file-job'),
     printTarget:            document.getElementById('print-target'),
     resumeTpl:              document.getElementById('resume-tpl'),
@@ -39,6 +38,88 @@ const dom = {
 };
 
 let isGenerating = false;
+
+// ── TRANSFORMATION PROMPT + MODAL ─────────────────────────────────────────────
+
+const TRANSFORMATION_PROMPT = `You are a Career Data Architect. Convert the resume below into a "Sentinel Master Database" — a single comprehensive record of everything in my career. This database will be used by an AI to generate highly targeted resumes for specific job descriptions later. Capture more than you think is needed.
+
+STRICT FORMAT RULES (the parser depends on these exactly):
+• Section headers must be exactly: # CONTACT, # SUMMARY, # EXPERIENCE, # SKILLS, # EDUCATION
+• Use ' — ' (space, em-dash, space) as the separator between all fields
+• Every experience bullet must start with a strong action verb
+• Preserve ALL numbers, percentages, dollar amounts, and metrics exactly as written
+• Include EVERY job, every bullet, every skill — nothing omitted
+• Output plain text only — no markdown asterisks, no bold, no tables
+
+═══════════════════════════════════════════════
+FORMAT REFERENCE (fill with your real data):
+═══════════════════════════════════════════════
+
+# CONTACT
+Full Name
+email@example.com — (555) 000-0000 — City, State
+LinkedIn: linkedin.com/in/username
+GitHub: github.com/username
+Portfolio: yoursite.com
+
+# SUMMARY
+[Write 4-6 sentences covering: total years of experience, all core domains you work across, your top 5-6 technical strengths, the types of teams/company sizes you've worked in, and one differentiator that makes you stand out. This will be cut down to 2 sentences per job application — be exhaustive here.]
+
+# EXPERIENCE
+[Every position, reverse chronological. Use this exact structure for each:]
+
+Company Name — City, State
+Job Title — Month Year — Month Year
+• [Action verb] + [what you did] + [scale/scope] + [tools/methods] + [quantified outcome]
+• [Include every bullet point, even minor ones — coverage matters]
+• [Add team size, budget, or user count wherever you know it]
+• [If a result isn't quantified, describe the impact in concrete terms]
+
+[Repeat for every position including internships, part-time, freelance, contract]
+
+# SKILLS
+[Group by category — be exhaustive, include everything you've touched professionally]
+Languages: Python, JavaScript, TypeScript, SQL, Java, ...
+Frameworks & Libraries: React, Node.js, FastAPI, Django, ...
+Cloud & DevOps: AWS, GCP, Docker, Kubernetes, CI/CD, ...
+Databases: PostgreSQL, MySQL, MongoDB, Redis, ...
+Tools & Platforms: Git, Jira, Figma, Linux, ...
+Certifications: AWS Solutions Architect — Amazon — 2023, ...
+Methodologies: Agile, Scrum, TDD, REST API design, ...
+Soft Skills: Cross-functional leadership, stakeholder communication, ...
+
+# EDUCATION
+[Each degree on its own block:]
+Degree Type — Major — University Name — Graduation Year
+GPA: X.X — Dean's List — Magna Cum Laude (include if notable)
+Relevant Coursework: Course 1, Course 2, Course 3
+Honors & Awards: [any academic recognition]
+
+[Include bootcamps, online certificates, continuing education if relevant]
+
+═══════════════════════════════════════════════
+Now convert my resume using the format above:
+[PASTE YOUR FULL RESUME BELOW THIS LINE]
+═══════════════════════════════════════════════`;
+
+const handleDownloadTemplate = () => {
+    const printTarget = document.getElementById('print-target');
+    printTarget.innerHTML = `
+        <div class="resume-page" style="font-family: 'Georgia', serif;">
+            <h1 class="r-name" style="margin-bottom: 4px; font-size: 18pt;">Sentinel Master Database</h1>
+            <p style="margin: 0 0 18px 0; font-size: 10pt; color: #555; font-style: italic;">
+                Step 1 of 2 — Use this prompt in Claude, ChatGPT, or any AI to build your career database.
+                Paste the result into the Master Resume field in ResumeGen. The AI will then specialize it per job.
+            </p>
+            <hr style="border: none; border-top: 2px solid #1a1a2e; margin-bottom: 18px;">
+            <div class="r-section">
+                <h2 class="r-section-title" style="font-size: 11pt; letter-spacing: 0.1em;">PROMPT — COPY EVERYTHING BELOW INTO YOUR AI</h2>
+                <div style="white-space: pre-wrap; margin-top: 14px; font-family: 'Courier New', monospace; font-size: 9pt; line-height: 1.6; background: #f8f8f8; padding: 14px; border-left: 3px solid #1a1a2e;">${TRANSFORMATION_PROMPT}</div>
+            </div>
+        </div>`;
+    window.print();
+    printTarget.innerHTML = '';
+};
 
 // ── API KEY MANAGEMENT ────────────────────────────────────────────────────────
 
@@ -80,15 +161,23 @@ async function tailorWithClaude(resumeData, keywords, jobDescText) {
         )
     );
 
-    const kwStr   = keywords.all.slice(0, 15).join(', ');
-    const bullStr = bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n');
+    const kwStr    = keywords.all.slice(0, 15).join(', ');
+    const bullStr  = bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n');
+    // Send the first 2000 chars of the job description for full context
+    const jobCtx   = jobDescText.slice(0, 2000);
 
     const userMessage =
-`You are an expert resume writer. Tailor the resume content below for a role requiring: ${kwStr}.
+`You are an elite resume writer. Your goal is to make this resume feel written specifically for this exact role — not just keyword-matched, but genuinely aligned in language, priorities, and framing.
+
+JOB POSTING:
+${jobCtx}
+
+KEY SKILLS THIS ROLE REQUIRES: ${kwStr}
 
 RULES:
-- SUMMARY: 2 punchy sentences, professional tone, naturally use relevant keywords.
-- BULLETS: Start with an action verb, ≤22 words, preserve all numbers/metrics, do NOT invent facts.
+- SUMMARY: Exactly 2 sentences. Open with the candidate's most relevant strength for THIS role. Mirror the job posting's vocabulary and priorities. No generic phrases like "results-driven" or "passionate about".
+- BULLETS: Start with an action verb. ≤22 words. Preserve all numbers/metrics exactly. Reframe each bullet to emphasize what THIS employer cares about. Do NOT invent facts or add new metrics.
+- Only rewrite bullets that are relevant — keep the rest as close to the original as possible.
 - Output ONLY the structured result below, nothing else.
 
 OUTPUT FORMAT:
@@ -98,8 +187,7 @@ BULLETS:
 2. <rewritten bullet>
 (continue for all ${bulletRefs.length} bullets)
 
-${resumeData.summary ? `CURRENT SUMMARY:\n${resumeData.summary}\n` : ''}
-BULLETS TO REWRITE:
+${resumeData.summary ? `CURRENT SUMMARY:\n${resumeData.summary}\n` : ''}BULLETS TO REWRITE:
 ${bullStr}`;
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -143,7 +231,7 @@ ${bullStr}`;
         const ref = bulletRefs[i];
         if (!ref) return;
         const text = line.replace(/^\d+[.)]\s+(?:\[.*?\]\s*)?/, '').trim();
-        if (text.length > 10 && text.length < 400) {
+        if (text.length > 10) {
             resumeData.experience[ref.ji].bullets[ref.bi] = text;
         }
     });
@@ -639,9 +727,9 @@ dom.apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') dom.ap
 dom.generateBtn.addEventListener('click', handleGenerate);
 dom.resetBtn.addEventListener('click', handleReset);
 dom.pdfBtn.addEventListener('click', printResume);
-dom.fileMaster.addEventListener('change', () => handleFileUpload(dom.fileMaster, dom.masterInput));
 dom.fileJob.addEventListener('change',   () => handleFileUpload(dom.fileJob,    dom.jobDescInput));
 document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleGenerate(); });
+document.getElementById('download-template-btn').addEventListener('click', handleDownloadTemplate);
 
 dom.resetBtn.disabled = false;
 

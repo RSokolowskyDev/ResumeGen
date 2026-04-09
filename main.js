@@ -1,199 +1,229 @@
-// ── MODEL CONFIG ──────────────────────────────────────────────────────────────
-// WebLLM model — runs via WebGPU, no ONNX, OpenAI-compatible API
-// See full list: https://github.com/mlc-ai/web-llm/blob/main/src/config.ts
-const WEBLLM_MODEL = 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC';
-const WEBLLM_CDN   = 'https://esm.run/@mlc-ai/web-llm';
-
-// ── MODEL STATE ───────────────────────────────────────────────────────────────
-let engine = null;   // WebLLM MLCEngine instance
+// ── GROQ CONFIG ───────────────────────────────────────────────────────────────
+const GROQ_MODEL   = 'llama-3.3-70b-versatile';
+const STORAGE_KEY  = 'resumegen_groq_api_key';
 
 // ── DOM REFS ──────────────────────────────────────────────────────────────────
 const dom = {
-    modelDot:            document.getElementById('model-dot'),
-    modelStatusText:     document.getElementById('model-status-text'),
-    modelProgressBar:    document.getElementById('model-progress-bar'),
-    modelProgressFill:   document.getElementById('model-progress-fill'),
-    modelLoading:        document.getElementById('model-loading'),
-    mlLabel:             document.getElementById('ml-label'),
-    mlBarFill:           document.getElementById('ml-bar-fill'),
-    mlPct:               document.getElementById('ml-pct'),
-    mlFile:              document.getElementById('ml-file'),
-    masterInput:         document.getElementById('master-resume-input'),
-    jobDescInput:        document.getElementById('job-desc-input'),
-    generateBtn:         document.getElementById('generate-btn'),
-    resetBtn:            document.getElementById('reset-btn'),
-    pdfBtn:              document.getElementById('pdf-btn'),
-    statusMessages:      document.getElementById('status-messages'),
-    genProgressBar:      document.getElementById('gen-progress-bar'),
-    genProgressFill:     document.getElementById('gen-progress-fill'),
-    atsPanel:            document.getElementById('ats-panel'),
-    atsScoreNum:         document.getElementById('ats-score-num'),
-    atsBarFill:          document.getElementById('ats-bar-fill'),
-    atsBarLabel:         document.getElementById('ats-bar-label'),
-    atsCounts:           document.getElementById('ats-counts'),
-    atsMissingRequired:  document.getElementById('ats-missing-required'),
+    modelDot:               document.getElementById('model-dot'),
+    modelStatusText:        document.getElementById('model-status-text'),
+    apiKeyInput:            document.getElementById('api-key-input'),
+    apiKeySave:             document.getElementById('api-key-save'),
+    apiKeyPanel:            document.getElementById('api-key-panel'),
+    masterInput:            document.getElementById('master-resume-input'),
+    jobDescInput:           document.getElementById('job-desc-input'),
+    generateBtn:            document.getElementById('generate-btn'),
+    resetBtn:               document.getElementById('reset-btn'),
+    pdfBtn:                 document.getElementById('pdf-btn'),
+    statusMessages:         document.getElementById('status-messages'),
+    genProgressBar:         document.getElementById('gen-progress-bar'),
+    genProgressFill:        document.getElementById('gen-progress-fill'),
+    atsPanel:               document.getElementById('ats-panel'),
+    atsScoreNum:            document.getElementById('ats-score-num'),
+    atsBarFill:             document.getElementById('ats-bar-fill'),
+    atsBarLabel:            document.getElementById('ats-bar-label'),
+    atsCounts:              document.getElementById('ats-counts'),
+    atsMissingRequired:     document.getElementById('ats-missing-required'),
     atsMissingRequiredList: document.getElementById('ats-missing-required-list'),
-    atsMissingPreferred: document.getElementById('ats-missing-preferred'),
-    atsMissingPreferredList: document.getElementById('ats-missing-preferred-list'),
-    atsSections:         document.getElementById('ats-sections'),
-    resumeOutput:        document.getElementById('resume-output'),
-    fileMaster:          document.getElementById('file-master'),
-    fileJob:             document.getElementById('file-job'),
-    printTarget:         document.getElementById('print-target'),
-    resumeTpl:           document.getElementById('resume-tpl'),
-    webgpuNotice:        document.getElementById('webgpu-notice'),
+    atsMissingPreferred:    document.getElementById('ats-missing-preferred'),
+    atsMissingPreferredList:document.getElementById('ats-missing-preferred-list'),
+    atsSections:            document.getElementById('ats-sections'),
+    resumeOutput:           document.getElementById('resume-output'),
+    fileJob:                document.getElementById('file-job'),
+    printTarget:            document.getElementById('print-target'),
+    resumeTpl:              document.getElementById('resume-tpl'),
 };
 
 let isGenerating = false;
 
-// ── MODEL LOADING ─────────────────────────────────────────────────────────────
+// ── API KEY MANAGEMENT ────────────────────────────────────────────────────────
 
-async function checkWebGPU() {
-    if (!navigator.gpu) return false;
-    try { return !!(await navigator.gpu.requestAdapter()); }
-    catch { return false; }
+function getApiKey() { return localStorage.getItem(STORAGE_KEY) || ''; }
+
+function setApiKey(key) {
+    localStorage.setItem(STORAGE_KEY, key.trim());
+    updateApiKeyStatus();
 }
 
-// Slow heartbeat tick: when no real progress events fire, inch the bar
-// forward so users see activity instead of a frozen bar.
-let _heartbeatTimer = null;
-let _currentPct = 0;
-
-function startHeartbeat() {
-    stopHeartbeat();
-    _heartbeatTimer = setInterval(() => {
-        // Slow crawl: never exceeds 89% unless real progress pushes past
-        if (_currentPct < 89) {
-            _currentPct = Math.min(_currentPct + 0.4, 89);
-            _applyPct(_currentPct, null);
-        }
-    }, 400);
-}
-
-function stopHeartbeat() {
-    if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
-}
-
-function _applyPct(pct, file) {
-    dom.mlBarFill.style.width = `${pct}%`;
-    dom.mlPct.textContent     = pct >= 100 ? 'Ready!' : `${Math.round(pct)}%`;
-    if (file !== null) dom.mlFile.textContent = file;
-    dom.modelProgressBar.classList.add('visible');
-    dom.modelProgressFill.style.width = `${pct}%`;
-}
-
-function makeProgressHandler(label) {
-    const fileProg = {};
-    return function(info) {
-        let pct  = null;
-        let file = (info.file || info.name || '').split('/').pop();
-
-        if (info.status === 'progress_total' && typeof info.progress === 'number') {
-            pct = Math.round(info.progress);
-        } else if ((info.status === 'downloading' || info.status === 'progress') && info.total > 0) {
-            const key = info.file || info.name || 'chunk';
-            fileProg[key] = { loaded: info.loaded || 0, total: info.total };
-            const tl = Object.values(fileProg).reduce((s, f) => s + f.loaded, 0);
-            const tt = Object.values(fileProg).reduce((s, f) => s + f.total,  0);
-            pct = tt > 0 ? Math.round((tl / tt) * 100) : 0;
-        } else if (info.status === 'loading' || info.status === 'initiate') {
-            pct  = Math.max(_currentPct, 90);
-            file = file || 'Loading into memory…';
-        } else if (info.status === 'done' || info.status === 'ready') {
-            pct  = 100;
-            file = 'Ready!';
-        }
-
-        if (pct !== null) {
-            _currentPct = pct;
-            dom.modelLoading.classList.add('visible');
-            dom.mlLabel.textContent = label;
-            _applyPct(pct, file);
-        }
-    };
-}
-
-function showLoadingBar(label) {
-    _currentPct = 0;
-    dom.modelLoading.classList.add('visible');
-    dom.mlLabel.textContent  = label;
-    dom.mlFile.textContent   = 'Connecting…';
-    dom.mlPct.textContent    = '0%';
-    dom.mlBarFill.style.width = '0%';
-    startHeartbeat();
-}
-
-function hideLoadingBar() {
-    stopHeartbeat();
-    // Flash "Ready!" briefly before hiding
-    _currentPct = 100;
-    _applyPct(100, 'Ready!');
-    dom.mlPct.textContent = 'Ready!';
-    dom.modelLoading.classList.add('ready');
-    setTimeout(() => {
-        dom.modelLoading.classList.remove('visible');
-        dom.modelLoading.classList.remove('ready');
-        dom.modelProgressBar.classList.remove('visible');
-    }, 2000);
-}
-
-function setModelStatus(type, text) {
-    dom.modelDot.className = `status-dot ${type}`;
-    dom.modelStatusText.textContent = text;
-}
-
-async function loadModel() {
-    const hasWebGPU = await checkWebGPU();
-    if (!hasWebGPU) {
-        setModelStatus('error', 'WebGPU not supported — try Chrome 113+');
-        dom.webgpuNotice.style.display = 'flex';
+function updateApiKeyStatus() {
+    const key = getApiKey();
+    if (key) {
+        dom.modelDot.className = 'status-dot ready';
+        dom.modelStatusText.textContent = 'Groq · Llama 3.3 70B · Ready';
         dom.generateBtn.disabled = false;
-        dom.resetBtn.disabled    = false;
-        return;
+        dom.apiKeyPanel.classList.add('key-saved');
+        dom.apiKeyInput.value = '';
+        dom.apiKeyInput.placeholder = 'API key saved ✓';
+    } else {
+        dom.modelDot.className = 'status-dot error';
+        dom.modelStatusText.textContent = 'Enter API key to activate';
+        dom.generateBtn.disabled = true;
+        dom.apiKeyPanel.classList.remove('key-saved');
     }
-
-    showLoadingBar('Qwen2.5-1.5B · WebGPU');
-    setModelStatus('loading', 'Loading WebLLM…');
-
-    try {
-        const webllm = await import(WEBLLM_CDN);
-
-        engine = await webllm.CreateMLCEngine(WEBLLM_MODEL, {
-            initProgressCallback: (report) => {
-                // report.progress is 0–1, report.text is a human-readable status
-                const pct  = Math.round(report.progress * 100);
-                const file = report.text || '';
-                _currentPct = pct;
-                dom.modelLoading.classList.add('visible');
-                dom.mlLabel.textContent = 'Qwen2.5-1.5B · WebGPU';
-                _applyPct(pct, file);
-                setModelStatus('loading', file.slice(0, 60) || 'Loading…');
-            },
-        });
-
-        hideLoadingBar();
-        setModelStatus('webgpu', 'Qwen2.5-1.5B ready · WebGPU ⚡');
-    } catch (err) {
-        console.error('WebLLM failed:', err);
-        hideLoadingBar();
-        setModelStatus('error', 'AI unavailable — formatting only');
-    }
-
-    dom.generateBtn.disabled = false;
-    dom.resetBtn.disabled    = false;
 }
 
-/**
- * SENTINEL TRANSFORMATION PROMPT (Use this in Gemini/GPT-4 to prepare your data):
- *
- * "Act as a Data Architect. Convert my resume into the 'Sentinel Optimized Database' format.
- * Rules:
- * 1. Use '# SECTION_NAME' for headers (CONTACT, SUMMARY, EXPERIENCE, SKILLS, EDUCATION).
- * 2. For Experience, use exactly: 'Company — Location' on one line, then 'Role — Dates' on the next.
- * 3. Use ' — ' (em-dash with spaces) as the separator.
- * 4. Keep every bullet point under 25 words.
- * 5. Output raw text only."
- */
+// ── GROQ API CALL ─────────────────────────────────────────────────────────────
+
+async function tailorWithGroq(resumeData, keywords, jobDescText) {
+    const bulletRefs = [];
+    resumeData.experience.forEach((job, ji) =>
+        job.bullets.forEach((b, bi) =>
+            bulletRefs.push({ ji, bi, text: b, ctx: `${job.role}${job.company ? ' at ' + job.company : ''}` })
+        )
+    );
+
+    const kwStr   = keywords.all.slice(0, 15).join(', ');
+    const bullStr = bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n');
+    const jobCtx  = jobDescText.slice(0, 2000);
+
+    const userMessage =
+`You are an elite resume writer. Make this resume feel written specifically for this exact role — aligned in language, priorities, and framing.
+
+JOB POSTING:
+${jobCtx}
+
+KEY SKILLS THIS ROLE REQUIRES: ${kwStr}
+
+RULES:
+- SUMMARY: Exactly 2 sentences. Open with the candidate's most relevant strength for THIS role. Mirror the job posting's vocabulary. No generic phrases like "results-driven" or "passionate about".
+- BULLETS: Start with an action verb. ≤22 words. Preserve all numbers/metrics exactly. Reframe to emphasize what THIS employer cares about. Do NOT invent facts.
+- Output ONLY the structured result below, nothing else.
+
+OUTPUT FORMAT:
+SUMMARY: <rewritten summary>
+BULLETS:
+1. <rewritten bullet>
+2. <rewritten bullet>
+(continue for all ${bulletRefs.length} bullets)
+
+${resumeData.summary ? `CURRENT SUMMARY:\n${resumeData.summary}\n` : ''}BULLETS TO REWRITE:
+${bullStr}`;
+
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error('No Groq API key set');
+
+    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({
+            model:       GROQ_MODEL,
+            max_tokens:  2048,
+            temperature: 0.2,
+            messages:    [{ role: 'user', content: userMessage }],
+        }),
+    });
+
+    if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`Groq API ${resp.status}: ${body}`);
+    }
+
+    const data = await resp.json();
+    const raw  = data.choices?.[0]?.message?.content || '';
+    console.log('[Groq] raw output:', raw.slice(0, 300));
+
+    // Parse summary
+    const sumMatch = raw.match(/SUMMARY:\s*(.+?)(?=\nBULLETS?|\n\n|$)/is);
+    if (sumMatch) {
+        const s = sumMatch[1].trim();
+        if (s.length > 20) resumeData.summary = s;
+    }
+
+    // Parse bullets
+    const bullSection = raw.match(/BULLETS?:\s*([\s\S]+)/i)?.[1] || raw;
+    const lines = bullSection.split('\n')
+        .map(l => l.trim())
+        .filter(l => /^\d+[.)]\s+\S/.test(l));
+
+    lines.forEach((line, i) => {
+        const ref = bulletRefs[i];
+        if (!ref) return;
+        const text = line.replace(/^\d+[.)]\s+(?:\[.*?\]\s*)?/, '').trim();
+        if (text.length > 10) resumeData.experience[ref.ji].bullets[ref.bi] = text;
+    });
+}
+
+const TRANSFORMATION_PROMPT = `You are a Career Data Architect. Convert the resume below into a "Sentinel Master Database" — a single comprehensive record of everything in my career. This database will be used by an AI to generate highly targeted resumes for specific job descriptions later. Capture more than you think is needed.
+
+STRICT FORMAT RULES (the parser depends on these exactly):
+• Section headers must be exactly: # CONTACT, # SUMMARY, # EXPERIENCE, # SKILLS, # EDUCATION
+• Use ' — ' (space, em-dash, space) as the separator between all fields
+• Every experience bullet must start with a strong action verb
+• Preserve ALL numbers, percentages, dollar amounts, and metrics exactly as written
+• Include EVERY job, every bullet, every skill — nothing omitted
+• Output plain text only — no markdown asterisks, no bold, no tables
+
+═══════════════════════════════════════════════
+FORMAT REFERENCE (fill with your real data):
+═══════════════════════════════════════════════
+
+# CONTACT
+Full Name
+email@example.com — (555) 000-0000 — City, State
+LinkedIn: linkedin.com/in/username
+GitHub: github.com/username
+Portfolio: yoursite.com
+
+# SUMMARY
+[Write 4-6 sentences covering: total years of experience, all core domains you work across, your top 5-6 technical strengths, the types of teams/company sizes you've worked in, and one differentiator that makes you stand out. This will be cut down to 2 sentences per job application — be exhaustive here.]
+
+# EXPERIENCE
+[Every position, reverse chronological. Use this exact structure for each:]
+
+Company Name — City, State
+Job Title — Month Year — Month Year
+• [Action verb] + [what you did] + [scale/scope] + [tools/methods] + [quantified outcome]
+• [Include every bullet point, even minor ones — coverage matters]
+• [Add team size, budget, or user count wherever you know it]
+• [If a result isn't quantified, describe the impact in concrete terms]
+
+[Repeat for every position including internships, part-time, freelance, contract]
+
+# SKILLS
+[Group by category — be exhaustive, include everything you've touched professionally]
+Languages: Python, JavaScript, TypeScript, SQL, Java, ...
+Frameworks & Libraries: React, Node.js, FastAPI, Django, ...
+Cloud & DevOps: AWS, GCP, Docker, Kubernetes, CI/CD, ...
+Databases: PostgreSQL, MySQL, MongoDB, Redis, ...
+Tools & Platforms: Git, Jira, Figma, Linux, ...
+Certifications: AWS Solutions Architect — Amazon — 2023, ...
+Methodologies: Agile, Scrum, TDD, REST API design, ...
+Soft Skills: Cross-functional leadership, stakeholder communication, ...
+
+# EDUCATION
+[Each degree on its own block:]
+Degree Type — Major — University Name — Graduation Year
+GPA: X.X — Dean's List — Magna Cum Laude (include if notable)
+Relevant Coursework: Course 1, Course 2, Course 3
+Honors & Awards: [any academic recognition]
+
+[Include bootcamps, online certificates, continuing education if relevant]
+
+═══════════════════════════════════════════════
+Now convert my resume using the format above:
+[PASTE YOUR FULL RESUME BELOW THIS LINE]
+═══════════════════════════════════════════════`;
+
+const handleDownloadTemplate = () => {
+    const printTarget = document.getElementById('print-target');
+    printTarget.innerHTML = `
+        <div class="resume-page" style="font-family: 'Georgia', serif;">
+            <h1 class="r-name" style="margin-bottom: 4px; font-size: 18pt;">Sentinel Master Database</h1>
+            <p style="margin: 0 0 18px 0; font-size: 10pt; color: #555; font-style: italic;">
+                Step 1 of 2 — Use this prompt in Claude, ChatGPT, or any AI to build your career database.
+                Paste the result into the Master Resume field in ResumeGen. The AI will then specialize it per job.
+            </p>
+            <hr style="border: none; border-top: 2px solid #1a1a2e; margin-bottom: 18px;">
+            <div class="r-section">
+                <h2 class="r-section-title" style="font-size: 11pt; letter-spacing: 0.1em;">PROMPT — COPY EVERYTHING BELOW INTO YOUR AI</h2>
+                <div style="white-space: pre-wrap; margin-top: 14px; font-family: 'Courier New', monospace; font-size: 9pt; line-height: 1.6; background: #f8f8f8; padding: 14px; border-left: 3px solid #1a1a2e;">${TRANSFORMATION_PROMPT}</div>
+            </div>
+        </div>`;
+    window.print();
+    printTarget.innerHTML = '';
+};
 
 // ── AI GENERATION ─────────────────────────────────────────────────────────────
 
@@ -235,7 +265,7 @@ async function tailorAll(resumeData, keywords) {
     // Collect all bullets with back-references
     const bulletRefs = [];
     resumeData.experience.forEach((job, ji) =>
-        job.bullets.forEach((b, bi) => bulletRefs.push({ ji, bi, text: b }))
+        job.bullets.forEach((b, bi) => bulletRefs.push({ ji, bi, text: b, ctx: `${job.role} at ${job.company}` }))
     );
 
     const parts = [];
@@ -243,18 +273,18 @@ async function tailorAll(resumeData, keywords) {
         parts.push(`SUMMARY:\n${resumeData.summary}`);
     }
     if (bulletRefs.length) {
-        parts.push(`BULLETS:\n${bulletRefs.map((b, i) => `${i + 1}. ${b.text}`).join('\n')}`);
+        parts.push(`BULLETS:\n${bulletRefs.map((b, i) => `${i + 1}. [${b.ctx}] ${b.text}`).join('\n')}`);
     }
     if (!parts.length) return;
 
     const prompt =
-        `You are a resume writer. Rewrite the content below for a role requiring: ${kwStr}.\n\n` +
+        `You are a resume writer. Select and rewrite only the most relevant bullets for a role requiring: ${kwStr}.\n\n` +
         `Rules:\n` +
         `- SUMMARY: 2 sentences, professional, include relevant keywords.\n` +
-        `- BULLETS: action verb start, ≤22 words each, keep all numbers/metrics.\n` +
+        `- BULLETS: action verb start, ≤22 words each, keep all numbers/metrics. Include [Company] context tag.\n` +
         `- Output ONLY the rewritten content in this exact format:\n` +
         `SUMMARY: <rewritten summary>\n` +
-        `BULLETS:\n1. <bullet>\n2. <bullet>\n...\n\n` +
+        `BULLETS:\n1. [Company Name] <bullet>\n2. [Company Name] <bullet>\n...\n\n` +
         parts.join('\n\n') + '\n\nRewritten:';
 
     const maxTok = 80 + bulletRefs.length * 55;
@@ -268,19 +298,19 @@ async function tailorAll(resumeData, keywords) {
         if (s.length > 20) resumeData.summary = s;
     }
 
-    // Parse bullets
+    // Parse bullets — clear existing then map by context
     const bullSection = raw.match(/BULLETS?:\s*([\s\S]+)/i)?.[1] || raw;
     const lines = bullSection.split('\n')
         .map(l => l.trim())
         .filter(l => /^\d+[.)]\s+\S/.test(l));
 
-    lines.forEach((line, i) => {
-        const ref = bulletRefs[i];
-        if (!ref) return;
-        const text = line.replace(/^\d+[.)]\s+/, '').trim();
-        if (text.length > 10 && text.length < 300) {
-            resumeData.experience[ref.ji].bullets[ref.bi] = text;
-        }
+    resumeData.experience.forEach(j => j.bullets = []);
+    lines.forEach(line => {
+        const match = line.match(/^\d+[.)]\s+\[(.*?)\]\s+(.*)/);
+        if (!match) return;
+        const [_, context, text] = match;
+        const job = resumeData.experience.find(j => `${j.role} at ${j.company}`.includes(context) || context.includes(j.company));
+        if (job && text.length > 10) job.bullets.push(text.trim());
     });
 }
 
@@ -682,8 +712,10 @@ function finishProgress() {
 
 async function handleGenerate() {
     if (isGenerating) return;
+    const apiKey      = getApiKey();
     const masterText  = dom.masterInput.value.trim();
     const jobDescText = dom.jobDescInput.value.trim();
+    if (!apiKey)      { alert('Enter and save your Groq API key first.'); return; }
     if (!masterText)  { alert('Please paste your master resume first.'); return; }
     if (!jobDescText) { alert('Please paste the job description first.'); return; }
 
@@ -694,8 +726,7 @@ async function handleGenerate() {
     dom.pdfBtn.disabled = true;
     dom.atsPanel.classList.remove('visible');
 
-    const hasAI = !!engine;
-    initProgress(hasAI ? 6 : 5);
+    initProgress(6);
 
     try {
         log('Parsing master resume…');
@@ -704,12 +735,8 @@ async function handleGenerate() {
         log('Analyzing job description…');
         const keywords = extractKeywords(jobDescText);
 
-        if (hasAI) {
-            log('Tailoring resume with AI (one batch call)…');
-            await tailorAll(resumeData, keywords);
-        } else {
-            log('No AI — using keyword reordering only…');
-        }
+        log('Tailoring with Groq · Llama 3.3 70B…');
+        await tailorWithGroq(resumeData, keywords, jobDescText);
 
         log('Reordering skills by relevance…');
         resumeData.skills = reorderSkills(resumeData.skills, keywords.all);
@@ -780,14 +807,18 @@ async function handleFileUpload(inputEl, targetTextarea) {
 dom.generateBtn.addEventListener('click', handleGenerate);
 dom.resetBtn.addEventListener('click', handleReset);
 dom.pdfBtn.addEventListener('click', printResume);
-dom.fileMaster.addEventListener('change', () => handleFileUpload(dom.fileMaster, dom.masterInput));
 dom.fileJob.addEventListener('change',   () => handleFileUpload(dom.fileJob,    dom.jobDescInput));
 document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleGenerate(); });
+document.getElementById('download-template-btn').addEventListener('click', handleDownloadTemplate);
 
-// Generate is enabled immediately so the user can test parsing/ATS without AI
-dom.generateBtn.disabled = false;
-dom.resetBtn.disabled    = false;
+dom.resetBtn.disabled = false;
 
-// ── INIT: load AI in background ───────────────────────────────────────────────
+dom.apiKeySave.addEventListener('click', () => {
+    const val = dom.apiKeyInput.value.trim();
+    if (val) setApiKey(val);
+});
+dom.apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') dom.apiKeySave.click(); });
 
-loadModel();
+// ── INIT ──────────────────────────────────────────────────────────────────────
+
+updateApiKeyStatus();

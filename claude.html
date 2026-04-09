@@ -21,6 +21,7 @@
         </div>
 
         <div class="nav-actions">
+            <button id="download-template-btn" class="nav-btn secondary">📥 Template PDF</button>
             <a href="index.html" class="nav-btn secondary mode-switch-btn">⚡ Local AI</a>
             <button id="reset-btn" class="nav-btn secondary" disabled>Reset</button>
             <button id="pdf-btn" class="nav-btn primary" disabled>Save PDF</button>
@@ -46,15 +47,8 @@
             <div class="input-group">
                 <div class="input-label-row">
                     <label>Master Resume</label>
-                    <label class="file-upload-btn">
-                        ↑ Upload file
-                        <input type="file" id="file-master" accept=".txt,.md,.pdf,.doc,.docx,.rtf" hidden>
-                    </label>
                 </div>
-                <textarea
-                    id="master-resume-input"
-                    placeholder="OPTIMIZED FORMAT (Copy/Paste this style):&#10;&#10;# CONTACT&#10;Name | Email | Phone | Location | LinkedIn&#10;&#10;# EXPERIENCE&#10;Company — Location&#10;Job Title — Dates&#10;- Bullet point 1&#10;- Bullet point 2&#10;&#10;# SKILLS&#10;Skill 1, Skill 2, Skill 3&#10;&#10;# EDUCATION&#10;Degree — School — Dates"
-                ></textarea>
+                <textarea id="master-resume-input" placeholder="PASTE YOUR OPTIMIZED MASTER DATABASE HERE..."></textarea>
             </div>
 
             <div class="input-group">
@@ -156,6 +150,7 @@
         </section>
     </div>
 </template>
+
 
 <script type="module" src="claude.js"></script>
 </body>

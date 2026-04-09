@@ -22,30 +22,16 @@
 
         <div class="model-status">
             <span id="model-dot" class="status-dot loading"></span>
-            <span id="model-status-text">Loading AI model...</span>
-            <div class="model-progress-bar" id="model-progress-bar">
-                <div class="model-progress-fill" id="model-progress-fill"></div>
-            </div>
+            <span id="model-status-text">Enter API key to activate</span>
         </div>
 
         <div class="nav-actions">
+            <button id="download-template-btn" class="nav-btn secondary">📥 Template PDF</button>
             <a href="claude.html" class="nav-btn secondary mode-switch-btn">✦ Claude AI</a>
             <button id="reset-btn" class="nav-btn secondary" disabled>Reset</button>
             <button id="pdf-btn" class="nav-btn primary" disabled>Save PDF</button>
         </div>
     </nav>
-
-    <!-- Model Loading Progress Bar (full-width, below nav) -->
-    <div id="model-loading">
-        <span class="ml-label" id="ml-label">Loading AI model</span>
-        <div class="ml-bar-wrap">
-            <div class="ml-bar">
-                <div class="ml-bar-fill" id="ml-bar-fill"></div>
-            </div>
-            <span class="ml-pct" id="ml-pct">0%</span>
-        </div>
-        <span class="ml-file" id="ml-file">Connecting…</span>
-    </div>
 
     <!-- Main Split Layout -->
     <div id="main-content">
@@ -53,24 +39,21 @@
         <!-- Left Panel -->
         <div id="left-panel">
 
-            <!-- WebGPU notice (shown by JS if needed) -->
-            <div id="webgpu-notice" style="display:none" class="notice-banner">
-                <span class="notice-icon">⚡</span>
-                <span>WebGPU not supported in this browser. Try Chrome 113+ or Edge 113+. Resume formatting still works without AI.</span>
+            <!-- API Key Input -->
+            <div id="api-key-panel" class="api-key-panel">
+                <div class="api-key-label">Groq API Key</div>
+                <div class="api-key-row">
+                    <input type="password" id="api-key-input" placeholder="gsk_…" autocomplete="off">
+                    <button id="api-key-save" class="api-key-save-btn">Save</button>
+                </div>
+                <div class="api-key-hint">Stored in localStorage only. Get a free key at console.groq.com</div>
             </div>
 
             <div class="input-group">
                 <div class="input-label-row">
                     <label>Master Resume</label>
-                    <label class="file-upload-btn">
-                        ↑ Upload file
-                        <input type="file" id="file-master" accept=".txt,.md,.pdf,.doc,.docx,.rtf" hidden>
-                    </label>
                 </div>
-                <textarea
-                    id="master-resume-input"
-                    placeholder="OPTIMIZED FORMAT (Copy/Paste this style):&#10;&#10;# CONTACT&#10;Name | Email | Phone | Location | LinkedIn&#10;&#10;# EXPERIENCE&#10;Company — Location&#10;Job Title — Dates&#10;- Bullet point 1&#10;- Bullet point 2&#10;&#10;# SKILLS&#10;Skill 1, Skill 2, Skill 3&#10;&#10;# EDUCATION&#10;Degree — School — Dates"
-                ></textarea>
+                <textarea id="master-resume-input" placeholder="PASTE YOUR OPTIMIZED MASTER DATABASE HERE..."></textarea>
             </div>
 
             <div class="input-group">
@@ -185,6 +168,7 @@
 
     </div>
 </template>
+
 
 <script type="module" src="main.js"></script>
 </body>

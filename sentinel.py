@@ -579,9 +579,83 @@ def main():
                 )
                 exec_response2 = call_claude(exec_prompt2, "Edit,Write,Bash")
                 if exec_response2:
-                    print(f"Retry done. Response: {exec_response2[:200]}\n")
+                    done_match2 = re.search(r"DONE:\s*(.+)", exec_response2, re.IGNORECASE)
+                    if done_match2:
+                        print(f"Retry done. Files modified: {done_match2.group(1).strip()}\n")
+                    else:
+                        print(f"Retry done. Response: {exec_response2[:200]}\n")
                 else:
                     print("  Retry failed.\n")
+                    continue
+
+                # Ask user to verify edits before re-running Gemini
+                print("-" * 50)
+                confirm = input("Review the edits in your editor. Do they look correct? (y/n): ").strip().lower()
+                print()
+                if confirm != "y":
+                    print("Skipping commit. Fix manually and restart sentinel.\n")
+                    continue
+
+                # Re-capture diff and re-run Gemini verification
+                try:
+                    diff_result2 = subprocess.run(
+                        ["git", "diff", "HEAD"], capture_output=True, text=True, encoding="utf-8"
+                    )
+                    diff_text2 = diff_result2.stdout
+                except Exception as e:
+                    print(f"  git diff failed: {e}")
+                    diff_text2 = ""
+
+                if not diff_text2.strip():
+                    print("  Warning: No changes detected in git diff.")
+                    cont2 = input("  Continue anyway? (y/n): ").strip().lower()
+                    if cont2 != "y":
+                        print()
+                        continue
+
+                compressed2 = compress_diff(diff_text2)
+                diff_summary2 = json.dumps(compressed2, indent=2)
+
+                print("Gemini re-verifying...")
+                verify_prompt2 = (
+                    "Claude has completed the retry implementation. Here is what actually changed:\n\n"
+                    f"{diff_summary2}\n\n"
+                    "Verify this against the original plan intent.\n\n"
+                    "Respond with EXACTLY one of:\n\n"
+                    "PASS\n"
+                    "Confirmed: [what was correctly implemented]\n\n"
+                    "ACTION\n"
+                    "Issue: [specific problem]\n"
+                    "Fix: [exact file, location, and what needs to change]\n\n"
+                    "MANUAL\n"
+                    "Reason: [why human intervention is needed]"
+                )
+
+                verify_response2 = call_gemini(chat, verify_prompt2)
+                if not verify_response2:
+                    print("  Gemini re-verification unavailable. Not committing.\n")
+                    continue
+
+                print(f"\n{verify_response2}\n")
+                verify_upper2 = verify_response2.upper().strip()
+
+                if verify_upper2.startswith("PASS"):
+                    try:
+                        short_task = task[:60]
+                        subprocess.run(["git", "add", "-A"], check=True)
+                        subprocess.run(
+                            ["git", "commit", "-m", f"sentinel: {short_task}"],
+                            check=True
+                        )
+                        subprocess.run(["git", "push"], check=True)
+                        print("Committed and pushed. Task complete.\n")
+                    except subprocess.CalledProcessError as e:
+                        print(f"  Git commit failed: {e}\n")
+
+                    if use_screenshots and screenshot_parts:
+                        archive_screenshots()
+                else:
+                    print("Gemini still not satisfied. Fix manually and restart sentinel.\n")
             else:
                 print("Skipping commit.\n")
 
