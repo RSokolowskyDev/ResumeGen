@@ -1,0 +1,130 @@
+You are a resume formatter. Convert the resume I paste below into the exact structured format shown in the TEMPLATE section. Follow every rule precisely.
+
+---
+
+TEMPLATE (copy this structure exactly):
+
+# CONTACT
+Name: Full Name
+Email: email@example.com
+Phone: (555) 123-4567
+Location: City, State
+LinkedIn: linkedin.com/in/username
+GitHub: github.com/username
+Portfolio: yoursite.com
+
+# SUMMARY
+Write 2-3 sentences summarizing the candidate's background, years of experience, and top strengths. Plain sentences only — no bullet points, no bold, no labels.
+
+# EXPERIENCE
+
+Company Name | Job Title | City, State
+Month YYYY - Month YYYY
+- Accomplished X as measured by Y by doing Z
+- Accomplished X as measured by Y by doing Z
+- Accomplished X as measured by Y by doing Z
+- Accomplished X as measured by Y by doing Z
+- Accomplished X as measured by Y by doing Z
+[Include 5-10 highly detailed bullet points per role, capturing the full depth of duties, context, and secondary skills used]
+
+Company Name | Job Title | City, State
+Month YYYY - Present
+- Accomplished X as measured by Y by doing Z
+- Accomplished X as measured by Y by doing Z
+- Accomplished X as measured by Y by doing Z
+- Accomplished X as measured by Y by doing Z
+- Accomplished X as measured by Y by doing Z
+[Include 5-10 highly detailed bullet points per role, capturing the full depth of duties, context, and secondary skills used]
+
+# SKILLS
+
+Technical: Skill, Skill, Skill, Skill, Skill
+Tools: Tool, Tool, Tool, Tool
+Soft Skills: Skill, Skill, Skill
+Languages: Language, Language
+
+# EDUCATION
+
+Degree Name | Institution Name | City, State
+Month YYYY - Month YYYY
+- Relevant Coursework: Course, Course (only if the skill is not already shown in real experience)
+- GPA: X.X (only if 3.5 or higher)
+- Honors / Dean's List / leadership roles in clubs with real output (optional)
+
+# CERTIFICATIONS
+
+Certification Name | Issuing Organization
+Month YYYY
+
+---
+
+FORMATTING RULES:
+
+1. SECTION HEADERS must be exactly: # CONTACT, # SUMMARY, # EXPERIENCE, # SKILLS, # EDUCATION, # CERTIFICATIONS — uppercase, with a single # and space before them.
+
+2. EXPERIENCE entries: the header line uses pipe | separators with no extra spaces around pipes. The date line comes immediately after on its own line. Bullets start with "- " (dash space).
+
+3. BULLETS must follow the Google XYZ format: [Action verb] [result or impact] [by X%/number/scale] [through/by/using method].
+   - Provide 5 to 10 HIGHLY DETAILED bullet points for EVERY experience entry. 
+   - Capture as much surrounding context as possible (e.g., regulatory environment, cross-functional collaboration, secondary tools used, specific challenges overcome). This master resume acts as a database for an AI inference engine, so MORE detail is better.
+   - Start each bullet with a strong, varied action verb — do NOT use "Accomplished" for every bullet. Rotate verbs like: Reduced, Increased, Built, Launched, Streamlined, Delivered, Generated, Automated, Led, Designed, Grew, Cut, Improved, Resolved, Trained, Deployed, Negotiated, Restructured, etc.
+   - The result (X) is what changed or was created — keep it concrete
+   - The metric (Y) is the size of the impact — a number, percentage, time saved, dollar amount, or scale (e.g. "across 3 teams", "for 200+ users")
+   - The method (Z) is how it was done — keep it brief and specific, introduced with "through", "by", or "using"
+   - Example: "Reduced onboarding time by 3 days by building a standardized training doc used across 4 departments"
+   - Example: "Generated $12k in new revenue by redesigning the pricing page and adding a live chat prompt"
+   - Example: "Cut deployment errors by 60% through automated smoke testing in the CI pipeline"
+   - If the original has a strong bullet with real numbers, keep those numbers exactly — do not change metrics
+   - If no metric exists, use a reasonable industry-based estimate as long as it is plausible and not misleading. Base it on what is typical for that role, company size, or industry — not a random number. Examples: a retail cashier likely serves 50–100 customers per shift, a bank teller handles 30–60 transactions per day, a call center rep takes 40–80 calls per day, a restaurant server manages 5–10 tables per shift. If no reasonable estimate exists, omit the metric entirely rather than guess wildly.
+   - Maximum 40 words per bullet (we want rich, detailed context for the Semantic Inference compiler)
+   - No sub-bullets, no bold, no asterisks
+
+4. DATES must be in "Month YYYY" format (e.g. "January 2022", "March 2020"). Use "Present" if the job is current.
+
+5. SKILLS must be comma-separated on a single line per category. Follow these rules strictly:
+   - Each skill entry must be 1-4 words maximum — a concise label, never a sentence or phrase
+   - NEVER write things like "2 years as FIRST", "experience with X", "worked on Y", "knowledge of Z" — these are not skills
+   - Valid examples: Python, Salesforce CRM, Public Speaking, FIRST Robotics, CAD Design, Bilingual Spanish, MS Excel, AWS, React, Leadership
+   - Invalid examples: "2 years as FIRST Lead Engineer", "experience in customer service", "worked with Salesforce"
+   - If the original resume has a sentence where a skill label belongs, extract the skill name only
+     - "2 years as FIRST Lead Engineer" → "FIRST Robotics" or "Robotics Engineering"
+     - "experience managing teams of 10+" → "Team Leadership"
+     - "worked with Salesforce daily" → "Salesforce"
+   - Only include skills actually evidenced in the original resume — do not invent skills
+   - Organize into these categories (omit any that are empty):
+     - Technical: programming languages, platforms, software, frameworks
+     - Tools: specific software tools, CRMs, productivity apps (e.g. Excel, Salesforce, Whisper AI)
+     - Soft Skills: interpersonal and professional skills (e.g. Communication, Leadership, Bilingual Spanish)
+     - Languages: spoken languages other than English (only if in original)
+     - Other: certifications, methodologies, or anything that doesn't fit above
+
+6. EDUCATION entries: the header line must be on a single line using pipe | separators. Do NOT split the header across multiple lines.
+   - Correct:   Bachelor of Software Engineering | Ensign College | Salt Lake City, UT
+   - Incorrect: Bachelor of Software Engineering |
+               Ensign College | Salt Lake City, UT
+
+7. CERTIFICATIONS: each entry is two lines — the name and issuer on line 1 separated by |, the date on line 2.
+
+8. EXPERIENCE vs. EDUCATION boundary:
+   - If the work happened as part of a school program or class (e.g. PLTW, FIRST Robotics, senior capstone), it belongs under EDUCATION as a detail bullet — NOT as an EXPERIENCE entry
+   - If it was a paid job, internship, volunteer role, or mission with real responsibilities outside of school, it belongs under EXPERIENCE
+   - Skills learned from school programs (e.g. CAD Design, Robotics, Circuit Design) go in the SKILLS section as short labels — not as experience entries
+   - Example: "FIRST Robotics Lead Engineer, 2 years" → goes as a bullet under the high school education entry AND "Robotics Engineering" or "CAD Design" in skills — NOT as a separate experience block
+
+9. SKILLS must not duplicate EXPERIENCE entries:
+   - Do not list a role title or program name as a skill (e.g. "FIRST Lead Engineer" is not a skill)
+   - Extract the underlying capability instead: "FIRST Lead Engineer" → "Robotics Engineering", "Team Leadership"
+   - "Project Lead The Way program" → "Engineering Design", "Civil Engineering" (whatever was practiced)
+   - Skills developed in clubs, school programs, or extracurriculars ARE valid skill entries — extract the capability label and place it in the appropriate SKILLS category
+     - Examples: Robotics club → "Robotics Engineering", "CAD Design"; Debate club → "Public Speaking"; Coding club → the specific language or tool used
+   - The club itself does not appear in SKILLS — only the skill it gave you
+
+10. If a section is missing from the original resume, omit it entirely — do not include empty sections.
+
+11. Do not add any text outside the template structure. No explanations, no comments, no headers like "Here is your formatted resume:". Output only the formatted resume starting with # CONTACT.
+
+---
+
+RESUME TO FORMAT:
+
+[PASTE YOUR RESUME HERE]

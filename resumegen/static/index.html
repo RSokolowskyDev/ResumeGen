@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ResumeGen · Local AI Resume Tailor</title>
+  <link rel="stylesheet" href="/static/index.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+</head>
+<body>
+
+<div id="app-wrapper">
+
+  <!-- ── SETTINGS MODAL ── -->
+  <div id="settings-overlay" class="modal-overlay">
+    <div class="modal-panel" role="dialog"
+         aria-modal="true"
+         aria-label="API Key Settings">
+
+      <div class="modal-header">
+        <div class="modal-title">resumegen ✦ &nbsp;Setup</div>
+        <button id="modal-close" class="modal-close-btn" aria-label="Close settings">✕</button>
+      </div>
+
+      <p class="modal-subtitle">
+        Add API keys to enable smarter job description parsing. All keys are optional — the tool works
+        without any. Keys are stored in your browser only and never sent to our servers.
+      </p>
+
+      <div class="modal-keys">
+
+        <div class="key-row">
+          <div class="key-row-left">
+            <div class="key-label">
+              Gemini
+              <span class="key-badge primary">Primary</span>
+            </div>
+            <div class="key-input-wrap">
+              <input type="password" id="key-gemini" class="key-input" placeholder="AIza…" autocomplete="off">
+              <button class="key-toggle" data-target="key-gemini">Show</button>
+            </div>
+          </div>
+          <div class="key-row-right">
+            <div class="key-status" id="status-gemini">
+              <span class="provider-dot grey"></span>
+              <span class="provider-label">No key</span>
+            </div>
+            <a href="https://aistudio.google.com" target="_blank" class="key-link">Get key ↗</a>
+          </div>
+        </div>
+
+        <div class="key-row">
+          <div class="key-row-left">
+            <div class="key-label">Groq</div>
+            <div class="key-input-wrap">
+              <input type="password" id="key-groq" class="key-input" placeholder="gsk_…" autocomplete="off">
+              <button class="key-toggle" data-target="key-groq">Show</button>
+            </div>
+          </div>
+          <div class="key-row-right">
+            <div class="key-status" id="status-groq">
+              <span class="provider-dot grey"></span>
+              <span class="provider-label">No key</span>
+            </div>
+            <a href="https://console.groq.com" target="_blank" class="key-link">Get key ↗</a>
+          </div>
+        </div>
+
+        <div class="key-row">
+          <div class="key-row-left">
+            <div class="key-label">Cerebras</div>
+            <div class="key-input-wrap">
+              <input type="password" id="key-cerebras" class="key-input" placeholder="csk_…" autocomplete="off">
+              <button class="key-toggle" data-target="key-cerebras">Show</button>
+            </div>
+          </div>
+          <div class="key-row-right">
+            <div class="key-status" id="status-cerebras">
+              <span class="provider-dot grey"></span>
+              <span class="provider-label">No key</span>
+            </div>
+            <a href="https://cloud.cerebras.ai" target="_blank" class="key-link">Get key ↗</a>
+          </div>
+        </div>
+
+        <div class="key-row">
+          <div class="key-row-left">
+            <div class="key-label">OpenRouter</div>
+            <div class="key-input-wrap">
+              <input type="password" id="key-openrouter" class="key-input" placeholder="sk-or-…" autocomplete="off">
+              <button class="key-toggle" data-target="key-openrouter">Show</button>
+            </div>
+          </div>
+          <div class="key-row-right">
+            <div class="key-status" id="status-openrouter">
+              <span class="provider-dot grey"></span>
+              <span class="provider-label">No key</span>
+            </div>
+            <a href="https://openrouter.ai" target="_blank" class="key-link">Get key ↗</a>
+          </div>
+        </div>
+
+        <div class="key-row">
+          <div class="key-row-left">
+            <div class="key-label">
+              Claude
+              <span class="key-badge paid">Paid API</span>
+            </div>
+            <div class="key-input-wrap">
+              <input type="password" id="key-claude" class="key-input" placeholder="sk-ant-…" autocomplete="off">
+              <button class="key-toggle" data-target="key-claude">Show</button>
+            </div>
+          </div>
+          <div class="key-row-right">
+            <div class="key-status" id="status-claude">
+              <span class="provider-dot grey"></span>
+              <span class="provider-label">No key</span>
+            </div>
+            <a href="https://console.anthropic.com" target="_blank" class="key-link">Get key ↗</a>
+          </div>
+        </div>
+
+        <div class="key-row python-row">
+          <div class="key-row-left">
+            <div class="key-label">
+              Python
+              <span class="key-badge always">Always on</span>
+            </div>
+            <div class="key-hint">Built-in spaCy parser. No key needed. Used as final fallback.</div>
+          </div>
+          <div class="key-row-right">
+            <div class="key-status" id="status-python">
+              <span class="provider-dot green"></span>
+              <span class="provider-label">Ready</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="modal-next-provider">
+        <span class="next-label">Next call will use:</span>
+        <span id="next-provider-name" class="next-value">Python fallback</span>
+      </div>
+
+      <div class="modal-no-keys-warning" id="no-keys-warning" style="display:none">
+        Running with Python-only parsing. Results may vary on complex job descriptions.
+        Consider adding at least one free API key above.
+      </div>
+
+      <div class="modal-footer">
+        <button id="modal-save" class="modal-save-btn">Save &amp; Continue</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── TOP NAV ── -->
+  <nav class="top-nav">
+    <div class="logo">resumegen ✦</div>
+    <div class="model-status">
+      <span id="model-dot" class="status-dot loading"></span>
+      <span id="model-status-text">Loading model...</span>
+    </div>
+    <div class="nav-actions">
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); cursor: pointer; margin-right: 8px;">
+        <input type="checkbox" id="fit-to-page-cb" checked> Fit to 1 Page
+      </label>
+      <button id="reset-btn" class="nav-btn secondary" disabled>Reset</button>
+      <button id="pdf-btn" class="nav-btn primary" disabled>Save PDF</button>
+      <button id="settings-btn" class="nav-btn icon-btn" aria-label="Open settings" title="API Key Settings">⚙</button>
+    </div>
+  </nav>
+
+  <div id="main-content">
+
+    <!-- ── LEFT PANEL ── -->
+    <div id="left-panel">
+
+      <!-- Master Resume -->
+      <div class="input-group">
+        <div class="input-label-row">
+          <label>Master Resume</label>
+          <label class="file-upload-btn mini">
+            ↑ Upload
+            <input type="file" id="file-master" accept=".txt,.md,.pdf,.docx" hidden>
+          </label>
+        </div>
+        <textarea id="master-resume-input"
+          placeholder="Paste your structured master resume here. Include real metrics in your bullets: accomplished X as measured by Y by doing Z."></textarea>
+      </div>
+
+      <!-- Job Description -->
+      <div class="input-group">
+        <div class="input-label-row">
+          <label>Job Description</label>
+          <label class="file-upload-btn mini">
+            ↑ Upload
+            <input type="file" id="file-job" accept=".txt,.md,.pdf,.docx" hidden>
+          </label>
+        </div>
+        <textarea id="job-desc-input" placeholder="Paste the job description here…"></textarea>
+      </div>
+
+      <!-- Section Order -->
+      <div id="section-order-panel">
+        <div class="section-order-header">
+          <span class="section-order-label">Section Order</span>
+          <span class="section-order-hint">drag to reorder</span>
+        </div>
+        <div id="section-order-list">
+          <div class="section-chip" draggable="true" data-section="summary">
+            <span class="drag-handle">≡</span>
+            <span class="chip-label">Summary</span>
+          </div>
+          <div class="section-chip" draggable="true" data-section="skills">
+            <span class="drag-handle">≡</span>
+            <span class="chip-label">Skills</span>
+          </div>
+          <div class="section-chip" draggable="true" data-section="experience">
+            <span class="drag-handle">≡</span>
+            <span class="chip-label">Experience</span>
+          </div>
+          <div class="section-chip" draggable="true" data-section="education">
+            <span class="drag-handle">≡</span>
+            <span class="chip-label">Education</span>
+          </div>
+          <div class="section-chip" draggable="true" data-section="certifications">
+            <span class="drag-handle">≡</span>
+            <span class="chip-label">Certifications</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Generate Button -->
+      <button id="generate-btn" class="generate-btn" disabled>
+        Generate Tailored Resume
+      </button>
+
+      <!-- Progress -->
+      <div id="status-log">
+        <div id="gen-progress-bar">
+          <div id="gen-progress-fill"></div>
+        </div>
+        <div id="progress-steps">
+          <div class="progress-step" data-step="parsing_resume">Parsing resume</div>
+          <div class="progress-step" data-step="parsing_jd">Analyzing job description</div>
+          <div class="progress-step" data-step="matching">Selecting skills</div>
+          <div class="progress-step" data-step="tailoring_summary">Writing summary</div>
+          <div class="progress-step" data-step="tailoring_job">
+            <span class="step-label">Tailoring experience</span>
+            <span class="step-job-bar" id="tailor-job-bar" style="display:none">
+              <span class="step-job-text" id="tailor-job-text"></span>
+              <span class="step-job-track">
+                <span class="step-job-fill" id="tailor-job-fill"></span>
+              </span>
+            </span>
+          </div>
+          <div class="progress-step" data-step="scoring">Scoring ATS</div>
+          <div class="progress-step" data-step="rendering">Assembling resume</div>
+        </div>
+      </div>
+
+      <!-- Activity Terminal -->
+      <div id="terminal-panel">
+        <div class="terminal-header">
+          <span class="terminal-title">Activity Log</span>
+          <button id="terminal-clear" class="terminal-clear-btn">Clear</button>
+        </div>
+        <div id="terminal-body"></div>
+      </div>
+
+      <!-- ATS Panel -->
+      <div id="ats-panel">
+        <div class="ats-title">ATS Match Score</div>
+        <div class="ats-overall">
+          <div class="ats-score-num" id="ats-score-num">—</div>
+          <div class="ats-bar-wrap">
+            <div class="ats-bar">
+              <div class="ats-bar-fill" id="ats-bar-fill" style="width:0%"></div>
+            </div>
+            <div class="ats-bar-label" id="ats-bar-label">Keyword match</div>
+          </div>
+        </div>
+        <div class="ats-counts" id="ats-counts"></div>
+        <div class="ats-missing" id="ats-missing-required" style="display:none">
+          <div class="ats-missing-label">Missing · Required</div>
+          <div class="ats-keyword-list" id="ats-missing-required-list"></div>
+        </div>
+        <div class="ats-missing" id="ats-missing-preferred" style="display:none">
+          <div class="ats-missing-label">Missing · Preferred</div>
+          <div class="ats-keyword-list" id="ats-missing-preferred-list"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── RIGHT PANEL ── -->
+    <div id="right-panel">
+      <div id="resume-output" contenteditable="true" spellcheck="false">
+        <div class="resume-placeholder">
+          <div class="placeholder-icon">📄</div>
+          <p>Your tailored resume will appear here</p>
+          <small>Paste your resume and job description, then click Generate</small>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script type="module" src="/static/main.js"></script>
+</body>
+</html>

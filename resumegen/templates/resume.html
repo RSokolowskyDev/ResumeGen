@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Calibri', 'Arial', sans-serif;
+    font-size: 10pt;
+    color: #1a1a1a;
+    margin: 0;
+    padding: 12.7mm;
+    line-height: 1.18;
+  }
+  @page { size: A4; margin: 12.7mm; }
+  @media print { body { padding: 0; } }
+
+  .r-name {
+    font-size: 16pt;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #111;
+  }
+  .r-contact {
+    font-size: 8pt;
+    color: #555;
+    margin: 2px 0 4pt;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 5px;
+    align-items: center;
+  }
+  .r-sep { color: #bbb; }
+  .r-contact a {
+    color: #2563eb;
+    text-decoration: none;
+  }
+  .r-section-title {
+    font-size: 8.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #2563eb;
+    border-bottom: 1px solid #2563eb;
+    padding-bottom: 1px;
+    margin: 4pt 0 4pt;
+  }
+  .r-job { margin-bottom: 4pt; }
+  .r-job-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .r-job-title {
+    font-weight: 700;
+    font-size: 10pt;
+  }
+  .r-job-company {
+    font-weight: 600;
+    color: #2563eb;
+    font-size: 10pt;
+  }
+  .r-job-meta {
+    font-size: 8.5pt;
+    color: #666;
+    white-space: nowrap;
+  }
+  .r-bullets {
+    margin: 1px 0 0 12px;
+    list-style-type: disc;
+  }
+  .r-bullets li {
+    font-size: 10pt;
+    line-height: 1.18;
+    margin-bottom: 0;
+    color: #222;
+  }
+  .r-skills-wrap {
+    font-size: 10pt;
+    line-height: 1.25;
+    color: #222;
+  }
+  .r-summary {
+    font-size: 10pt;
+    line-height: 1.25;
+    color: #222;
+  }
+  .r-edu { margin-bottom: 4pt; }
+  .r-cert {
+    margin-bottom: 2pt;
+    font-size: 10pt;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="r-name">{{ contact.name }}</div>
+  <div class="r-contact">
+    {% if contact.email %}
+      <span>{{ contact.email }}</span>
+    {% endif %}
+    {% if contact.phone %}
+      <span class="r-sep">|</span>
+      <span>{{ contact.phone }}</span>
+    {% endif %}
+    {% if contact.location %}
+      <span class="r-sep">|</span>
+      <span>{{ contact.location }}</span>
+    {% endif %}
+    {% if contact.linkedin %}
+      <span class="r-sep">|</span>
+      <a href="https://{{ contact.linkedin }}">{{ contact.linkedin }}</a>
+    {% endif %}
+    {% if contact.github %}
+      <span class="r-sep">|</span>
+      <a href="https://{{ contact.github }}">{{ contact.github }}</a>
+    {% endif %}
+    {% if contact.portfolio %}
+      <span class="r-sep">|</span>
+      <a href="https://{{ contact.portfolio }}">{{ contact.portfolio }}</a>
+    {% endif %}
+  </div>
+</header>
+
+{% for section in section_order %}
+
+  {% if section == 'summary' and summary %}
+  <section>
+    <h2 class="r-section-title">Professional Summary</h2>
+    <p class="r-summary">{{ summary }}</p>
+  </section>
+  {% endif %}
+
+  {% if section == 'skills' and skills %}
+  <section>
+    <h2 class="r-section-title">Skills</h2>
+    <div class="r-skills-wrap">
+      {% for skill in skills %}
+        {{ skill }}{% if not loop.last %}<span class="r-sep"> • </span>{% endif %}
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if section == 'experience' and experience %}
+  <section>
+    <h2 class="r-section-title">Experience</h2>
+    {% for job in experience %}
+    <div class="r-job">
+      <div class="r-job-row">
+        <span class="r-job-title">{{ job.title }}</span>
+        <span class="r-job-meta">{{ job.start_date }} – {{ job.end_date }}</span>
+      </div>
+      <div class="r-job-row">
+        <span class="r-job-company">{{ job.company }}</span>
+        <span class="r-job-meta">{{ job.location }}</span>
+      </div>
+      {% if job.bullets %}
+      <ul class="r-bullets">
+        {% for bullet in job.bullets %}
+        <li>{{ bullet }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if section == 'education' and education %}
+  <section>
+    <h2 class="r-section-title">Education</h2>
+    {% for edu in education %}
+    <div class="r-edu">
+      <div class="r-job-row">
+        <span class="r-job-title">{{ edu.degree }}</span>
+        <span class="r-job-meta">{{ edu.start_date }} – {{ edu.end_date }}</span>
+      </div>
+      <div class="r-job-row">
+        <span class="r-job-company">{{ edu.institution }}</span>
+        <span class="r-job-meta">{{ edu.location }}</span>
+      </div>
+      {% if edu.details %}
+      <ul class="r-bullets">
+        {% for detail in edu.details %}
+        <li>{{ detail }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if section == 'certifications' and certifications %}
+  <section>
+    <h2 class="r-section-title">Certifications</h2>
+    {% for cert in certifications %}
+    <div class="r-cert">
+      <span class="r-job-title">{{ cert.name }}</span>
+      <span class="r-sep"> · </span>
+      <span class="r-job-company">{{ cert.issuer }}</span>
+      {% if cert.date %}
+      <span class="r-sep"> · </span>
+      <span class="r-job-meta">{{ cert.date }}</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+{% endfor %}
+
+</body>
+</html>

@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+torch
+transformers
+accelerate
+spacy
+rapidfuzz
+scikit-learn
+jinja2
+httpx
+python-docx
+pypdf2
